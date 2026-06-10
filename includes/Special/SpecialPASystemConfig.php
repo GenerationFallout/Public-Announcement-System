@@ -58,6 +58,17 @@ class SpecialPASystemConfig extends FormSpecialPage {
 		return $this->msg( 'pasystem-config-intro' )->parseAsBlock();
 	}
 
+	/**
+	 * Prefix applied by HTMLForm to the section legend message keys
+	 * (default would be 'pasystemconfig', the lowercased page name).
+	 * The section names below resolve to pasystem-config-section-*.
+	 *
+	 * @inheritDoc
+	 */
+	protected function getMessagePrefix() {
+		return 'pasystem-config';
+	}
+
 	/** @inheritDoc */
 	protected function getDisplayFormat() {
 		return 'ooui';
@@ -91,7 +102,7 @@ class SpecialPASystemConfig extends FormSpecialPage {
 					'pasystem-config-format-embed' => 'embed',
 				],
 				'default'          => (string)$config->get( 'PASystemFormat' ),
-				'section'          => 'pasystem-config-section-general',
+				'section'          => 'section-general',
 			],
 			'deliverymode' => [
 				'type'             => 'select',
@@ -101,20 +112,20 @@ class SpecialPASystemConfig extends FormSpecialPage {
 					'pasystem-config-deliverymode-job'       => 'job',
 				],
 				'default'          => (string)$config->get( 'PASystemDeliveryMode' ),
-				'section'          => 'pasystem-config-section-general',
+				'section'          => 'section-general',
 			],
 			'botname' => [
 				'type'          => 'text',
 				'label-message' => 'pasystem-config-botname',
 				'help-message'  => 'pasystem-config-botname-help',
 				'default'       => (string)$config->get( 'PASystemBotName' ),
-				'section'       => 'pasystem-config-section-general',
+				'section'       => 'section-general',
 			],
 			'botavatar' => [
 				'type'          => 'text',
 				'label-message' => 'pasystem-config-botavatar',
 				'default'       => (string)$config->get( 'PASystemBotAvatarUrl' ),
-				'section'       => 'pasystem-config-section-general',
+				'section'       => 'section-general',
 			],
 
 			// ===== Filtering =====
@@ -122,57 +133,57 @@ class SpecialPASystemConfig extends FormSpecialPage {
 				'type'          => 'check',
 				'label-message' => 'pasystem-config-notifybots',
 				'default'       => (bool)$config->get( 'PASystemNotifyBots' ),
-				'section'       => 'pasystem-config-section-filters',
+				'section'       => 'section-filters',
 			],
 			'notifyminor' => [
 				'type'          => 'check',
 				'label-message' => 'pasystem-config-notifyminor',
 				'default'       => (bool)$config->get( 'PASystemNotifyMinor' ),
-				'section'       => 'pasystem-config-section-filters',
+				'section'       => 'section-filters',
 			],
 			'notifycategorization' => [
 				'type'          => 'check',
 				'label-message' => 'pasystem-config-notifycategorization',
 				'default'       => (bool)$config->get( 'PASystemNotifyCategorization' ),
-				'section'       => 'pasystem-config-section-filters',
+				'section'       => 'section-filters',
 			],
 			'notifyexternal' => [
 				'type'          => 'check',
 				'label-message' => 'pasystem-config-notifyexternal',
 				'default'       => (bool)$config->get( 'PASystemNotifyExternal' ),
-				'section'       => 'pasystem-config-section-filters',
+				'section'       => 'section-filters',
 			],
 			'includedns' => [
 				'type'          => 'namespacesmultiselect',
 				'label-message' => 'pasystem-config-includedns',
 				'help-message'  => 'pasystem-config-includedns-help',
 				'default'       => implode( "\n", (array)$config->get( 'PASystemIncludedNamespaces' ) ),
-				'section'       => 'pasystem-config-section-filters',
+				'section'       => 'section-filters',
 			],
 			'excludedns' => [
 				'type'          => 'namespacesmultiselect',
 				'label-message' => 'pasystem-config-excludedns',
 				'default'       => implode( "\n", (array)$config->get( 'PASystemExcludedNamespaces' ) ),
-				'section'       => 'pasystem-config-section-filters',
+				'section'       => 'section-filters',
 			],
 			'excludedusers' => [
 				'type'          => 'usersmultiselect',
 				'label-message' => 'pasystem-config-excludedusers',
 				'default'       => implode( "\n", (array)$config->get( 'PASystemExcludedUsers' ) ),
-				'section'       => 'pasystem-config-section-filters',
+				'section'       => 'section-filters',
 			],
 			'excludedlogtypes' => [
 				'type'          => 'text',
 				'label-message' => 'pasystem-config-excludedlogtypes',
 				'help-message'  => 'pasystem-config-excludedlogtypes-help',
 				'default'       => implode( ', ', (array)$config->get( 'PASystemExcludedLogTypes' ) ),
-				'section'       => 'pasystem-config-section-filters',
+				'section'       => 'section-filters',
 			],
 			'stripautosummaries' => [
 				'type'          => 'check',
 				'label-message' => 'pasystem-config-stripautosummaries',
 				'default'       => (bool)$config->get( 'PASystemStripAutoSummaries' ),
-				'section'       => 'pasystem-config-section-filters',
+				'section'       => 'section-filters',
 			],
 			'mindiffsize' => [
 				'type'          => 'int',
@@ -180,7 +191,7 @@ class SpecialPASystemConfig extends FormSpecialPage {
 				'label-message' => 'pasystem-config-mindiffsize',
 				'help-message'  => 'pasystem-config-mindiffsize-help',
 				'default'       => (int)$config->get( 'PASystemMinDiffSize' ),
-				'section'       => 'pasystem-config-section-filters',
+				'section'       => 'section-filters',
 			],
 			'maxperminute' => [
 				'type'          => 'int',
@@ -188,7 +199,7 @@ class SpecialPASystemConfig extends FormSpecialPage {
 				'label-message' => 'pasystem-config-maxperminute',
 				'help-message'  => 'pasystem-config-maxperminute-help',
 				'default'       => (int)$config->get( 'PASystemMaxPerMinute' ),
-				'section'       => 'pasystem-config-section-filters',
+				'section'       => 'section-filters',
 			],
 
 			// ===== Appearance =====
@@ -206,7 +217,7 @@ class SpecialPASystemConfig extends FormSpecialPage {
 					'pasystem-config-display-timestamp' => 'timestamp',
 				],
 				'default'          => $displayDefaults,
-				'section'          => 'pasystem-config-section-appearance',
+				'section'          => 'section-appearance',
 			],
 			'actionicons' => [
 				'type'                => 'textarea',
@@ -215,7 +226,7 @@ class SpecialPASystemConfig extends FormSpecialPage {
 				'help-message'        => 'pasystem-config-actionicons-help',
 				'default'             => FormatJson::encode( $icons, "\t" ),
 				'validation-callback' => [ $this, 'validateJsonMap' ],
-				'section'             => 'pasystem-config-section-appearance',
+				'section'             => 'section-appearance',
 			],
 			'embedcolors' => [
 				'type'                => 'textarea',
@@ -224,7 +235,7 @@ class SpecialPASystemConfig extends FormSpecialPage {
 				'help-message'        => 'pasystem-config-embedcolors-help',
 				'default'             => FormatJson::encode( (array)$config->get( 'PASystemEmbedColors' ), "\t" ),
 				'validation-callback' => [ $this, 'validateJsonMap' ],
-				'section'             => 'pasystem-config-section-appearance',
+				'section'             => 'section-appearance',
 			],
 
 			// ===== Advanced =====
@@ -232,7 +243,7 @@ class SpecialPASystemConfig extends FormSpecialPage {
 				'type'          => 'check',
 				'label-message' => 'pasystem-config-debug',
 				'default'       => (bool)$config->get( 'PASystemDebug' ),
-				'section'       => 'pasystem-config-section-advanced',
+				'section'       => 'section-advanced',
 			],
 		];
 	}
