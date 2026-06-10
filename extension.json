@@ -1,0 +1,144 @@
+{
+	"name": "PublicAnnouncementSystem",
+	"namemsg": "pasystem-extensionname",
+	"version": "1.0.0",
+	"author": [
+		"Fallout Generation"
+	],
+	"url": "https://fallout-wiki.com/Extension:PublicAnnouncementSystem",
+	"descriptionmsg": "pasystem-desc",
+	"license-name": "GPL-2.0-or-later",
+	"type": "other",
+	"requires": {
+		"MediaWiki": ">= 1.43.0",
+		"platform": {
+			"php": ">= 8.1"
+		}
+	},
+	"manifest_version": 2,
+	"MessagesDirs": {
+		"PublicAnnouncementSystem": [
+			"i18n"
+		]
+	},
+	"AutoloadNamespaces": {
+		"MediaWiki\\Extension\\PublicAnnouncementSystem\\": "includes/"
+	},
+	"ServiceWiringFiles": [
+		"includes/ServiceWiring.php"
+	],
+	"HookHandlers": {
+		"recentchange": {
+			"class": "MediaWiki\\Extension\\PublicAnnouncementSystem\\Hooks\\RecentChangeHooks",
+			"services": [
+				"MainConfig",
+				"JobQueueGroup",
+				"PASystem.ChangeFilter"
+			]
+		}
+	},
+	"Hooks": {
+		"RecentChange_save": {
+			"handler": "recentchange"
+		}
+	},
+	"JobClasses": {
+		"PASystemDiscordNotify": {
+			"class": "MediaWiki\\Extension\\PublicAnnouncementSystem\\Job\\DiscordNotifyJob",
+			"needsPage": false
+		}
+	},
+	"SpecialPages": {
+		"PASystemTest": {
+			"class": "MediaWiki\\Extension\\PublicAnnouncementSystem\\Special\\SpecialPASystemTest",
+			"services": [
+				"MainConfig",
+				"HttpRequestFactory",
+				"PASystem.DiscordNotifier"
+			]
+		}
+	},
+	"AvailableRights": [
+		"pasystem-admin"
+	],
+	"GroupPermissions": {
+		"sysop": {
+			"pasystem-admin": true
+		}
+	},
+	"config": {
+		"PASystemWebhookUrl": {
+			"value": "",
+			"description": "URL du webhook Discord. Si vide, l'extension est désactivée."
+		},
+		"PASystemBotName": {
+			"value": "Marcus",
+			"description": "Nom affiché du bot dans Discord."
+		},
+		"PASystemBotAvatarUrl": {
+			"value": "",
+			"description": "URL de l'avatar Discord (optionnel)."
+		},
+		"PASystemWikiBaseUrl": {
+			"value": "",
+			"description": "URL de base du wiki pour générer les liens (ex: https://fallout-wiki.com). Si vide, déduit de $wgServer + $wgArticlePath."
+		},
+		"PASystemExcludedNamespaces": {
+			"value": [],
+			"description": "Liste des numéros de namespaces à exclure (ex: [2, 3] pour exclure User et User_talk)."
+		},
+		"PASystemExcludedUsers": {
+			"value": [],
+			"description": "Liste des noms d'utilisateurs à exclure des notifications."
+		},
+		"PASystemExcludedLogTypes": {
+			"value": [],
+			"description": "Types de logs à exclure (ex: ['patrol', 'thanks'])."
+		},
+		"PASystemNotifyBots": {
+			"value": false,
+			"description": "Notifier les modifications faites par des comptes bots."
+		},
+		"PASystemNotifyMinor": {
+			"value": true,
+			"description": "Notifier les modifications mineures."
+		},
+		"PASystemMinDiffSize": {
+			"value": 0,
+			"description": "Taille minimale (octets) du diff pour notifier. 0 = notifier toutes les modifs."
+		},
+		"PASystemEmbedColors": {
+			"value": {
+				"edit": 3447003,
+				"new": 5763719,
+				"log": 15844367,
+				"delete": 15548997,
+				"move": 15105570,
+				"upload": 10181046,
+				"newuser": 1752220,
+				"block": 10038562,
+				"protect": 15844367
+			},
+			"description": "Couleurs hex (decimal) des embeds par type d'action."
+		},
+		"PASystemDebug": {
+			"value": false,
+			"description": "Active les logs verbeux dans le canal de log PASystem."
+		},
+		"PASystemDeliveryMode": {
+			"value": "immediate",
+			"description": "Mode d'envoi : 'immediate' (DeferredUpdate POSTSEND, latence < 1s, sans retry) ou 'job' (JobQueue, retry automatique mais latence dépend du JobRunner)."
+		},
+		"PASystemFormat": {
+			"value": "line",
+			"description": "Format des messages Discord : 'line' (message texte compact sur une ligne, défaut) ou 'embed' (embed riche détaillé avec champs)."
+		},
+		"PASystemStripAutoSummaries": {
+			"value": true,
+			"description": "Masque les résumés auto-générés par MediaWiki (style « Page créée avec ‹contenu› » pour les créations). Les commentaires saisis manuellement restent toujours affichés. Mettre à false pour TOUT afficher, y compris les extraits de contenu."
+		}
+	},
+	"ConfigRegistry": {
+		"PublicAnnouncementSystem": "GlobalVarConfig::newInstance"
+	}
+}
