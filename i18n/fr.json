@@ -1,6 +1,6 @@
 {
 	"@metadata": {
-		"authors": [ "Fallout Generation" ]
+		"authors": [ "Archives de Vault-Tec" ]
 	},
 	"pasystem-extensionname": "Système d'annonces publiques",
 	"pasystem-desc": "Diffuse les modifications récentes du wiki vers Discord sous forme d'annonces publiques (édits, créations, suppressions, déplacements, téléversements, créations de compte, blocages…).",
