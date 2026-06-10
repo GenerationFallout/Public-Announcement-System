@@ -1,6 +1,6 @@
 {
 	"@metadata": {
-		"authors": [ "Fallout Generation" ]
+		"authors": [ "Archives de Vault-Tec" ]
 	},
 	"pasystem-extensionname": "Public Announcement System",
 	"pasystem-desc": "Broadcasts wiki recent changes to Discord as public announcements (edits, creations, deletions, moves, uploads, account creations, blocks…).",

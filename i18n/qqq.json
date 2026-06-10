@@ -1,6 +1,6 @@
 {
 	"@metadata": {
-		"authors": [ "Fallout Generation" ]
+		"authors": [ "Archives de Vault-Tec" ]
 	},
 	"pasystem-extensionname": "Short name of the extension, shown on Special:Version.",
 	"pasystem-desc": "{{desc|name=Public Announcement System|url=https://github.com/GenerationFallout/Public-Announcement-System}}",
