@@ -11,9 +11,11 @@ $specialPageAliases = [];
 /** English (English) */
 $specialPageAliases['en'] = [
 	'PASystemTest' => [ 'PASystemTest', 'PublicAnnouncementSystemTest' ],
+	'PASystemConfig' => [ 'PASystemConfig', 'PublicAnnouncementSystemConfig' ],
 ];
 
 /** French (français) */
 $specialPageAliases['fr'] = [
 	'PASystemTest' => [ 'Test_des_annonces_publiques' ],
+	'PASystemConfig' => [ 'Configuration_des_annonces_publiques' ],
 ];

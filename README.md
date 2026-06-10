@@ -36,9 +36,25 @@ Built for performance and reliability:
 
 The extension is **disabled** as long as `$wgPASystemWebhookUrl` is empty.
 
+## Configuring through the wiki (recommended)
+
+Almost everything can be configured **without touching `LocalSettings.php`**, from the special page **`Special:PASystemConfig`** (right: `pasystem-admin`, sysops by default). The form covers the message format, delivery mode, bot identity, all the filters, the flood cap, the display toggles, icons and colors.
+
+- Settings saved there are stored in **`MediaWiki:PASystemConfig.json`** — versioned, watchable and revertable like any wiki page — and **take precedence over `LocalSettings.php`**.
+- To go back to the `LocalSettings.php` values, delete that page.
+- Invalid values in the JSON page are ignored (fallback to `LocalSettings.php`); a broken page can never take the wiki down.
+- **Exception:** the webhook URLs (`$wgPASystemWebhookUrl`, `$wgPASystemWebhookRoutes`) can **only** be set in `LocalSettings.php`. Wiki pages are publicly readable and webhook URLs embed a secret token — storing them on-wiki would leak them.
+
+So the minimal `LocalSettings.php` stays at two lines, and everything else is managed from the wiki:
+
+```php
+wfLoadExtension( 'PublicAnnouncementSystem' );
+$wgPASystemWebhookUrl = 'https://discord.com/api/webhooks/…/…';
+```
+
 ## Configuration reference
 
-All settings go in `LocalSettings.php`.
+All settings below can also be set in `LocalSettings.php`. The on-wiki values from `Special:PASystemConfig` take precedence (webhooks excepted).
 
 ### Connection
 
@@ -193,9 +209,12 @@ Discord markdown (`**bold**`, `` `code` ``, emoji) is allowed in all of these me
   rate limits fall back to the job queue). Use the `job` mode if you need
   guaranteed delivery.
 
-## Special page
+## Special pages
 
-`Special:PASystemTest` (right: `pasystem-admin`, granted to sysops by default) sends a test announcement to the configured webhook, so you can validate the integration and the rendering without editing the wiki.
+- **`Special:PASystemConfig`** — graphical configuration (see above).
+- **`Special:PASystemTest`** — sends a test announcement to the configured webhook, so you can validate the integration and the rendering without editing the wiki.
+
+Both require the `pasystem-admin` right (granted to sysops by default).
 
 ## Logging & troubleshooting
 

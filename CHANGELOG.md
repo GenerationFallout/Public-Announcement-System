@@ -28,6 +28,14 @@ a single wiki and can be installed on any MediaWiki ≥ 1.43, in any language.
 
 ### Added
 
+- **`Special:PASystemConfig`** — graphical configuration page
+  (`pasystem-admin` right): message format, delivery mode, bot identity,
+  every filter, flood cap, display toggles, icons and colors are editable
+  without touching `LocalSettings.php`. Values are stored in
+  `MediaWiki:PASystemConfig.json` (versioned, revertable) and take
+  precedence over `LocalSettings.php`; invalid values fall back safely.
+  Webhook URLs deliberately stay in `LocalSettings.php` (wiki pages are
+  public and the URLs embed a secret token).
 - **On-wiki text customization**: every announcement sentence is a
   `pasystem-*` message that can be overridden by editing the corresponding
   `MediaWiki:` page on the wiki. Full sentence templates (with positional

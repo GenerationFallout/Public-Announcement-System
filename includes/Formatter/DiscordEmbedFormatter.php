@@ -44,7 +44,7 @@ class DiscordEmbedFormatter {
 	private const FLAG_SUPPRESS_EMBEDS = 4;
 
 	/** Default emoji per action kind, overridable via $wgPASystemActionIcons */
-	private const DEFAULT_ICONS = [
+	public const DEFAULT_ICONS = [
 		'edit'      => '📝',
 		'new'       => '🆕',
 		'upload'    => '📤',
@@ -61,7 +61,7 @@ class DiscordEmbedFormatter {
 	];
 
 	/** Default display toggles, overridable via $wgPASystemDisplay */
-	private const DEFAULT_DISPLAY = [
+	public const DEFAULT_DISPLAY = [
 		'icons'     => true,
 		'delta'     => true,
 		'summary'   => true,
