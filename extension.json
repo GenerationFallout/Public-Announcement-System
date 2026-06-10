@@ -1,11 +1,11 @@
 {
 	"name": "PublicAnnouncementSystem",
 	"namemsg": "pasystem-extensionname",
-	"version": "1.0.0",
+	"version": "2.0.0",
 	"author": [
 		"Fallout Generation"
 	],
-	"url": "https://fallout-wiki.com/Extension:PublicAnnouncementSystem",
+	"url": "https://github.com/GenerationFallout/Public-Announcement-System",
 	"descriptionmsg": "pasystem-desc",
 	"license-name": "GPL-2.0-or-later",
 	"type": "other",
@@ -21,6 +21,9 @@
 			"i18n"
 		]
 	},
+	"ExtensionMessagesFiles": {
+		"PublicAnnouncementSystemAlias": "PublicAnnouncementSystem.alias.php"
+	},
 	"AutoloadNamespaces": {
 		"MediaWiki\\Extension\\PublicAnnouncementSystem\\": "includes/"
 	},
@@ -31,9 +34,10 @@
 		"recentchange": {
 			"class": "MediaWiki\\Extension\\PublicAnnouncementSystem\\Hooks\\RecentChangeHooks",
 			"services": [
-				"MainConfig",
+				"PASystem.Config",
 				"JobQueueGroup",
-				"PASystem.ChangeFilter"
+				"PASystem.ChangeFilter",
+				"PASystem.FloodGuard"
 			]
 		}
 	},
@@ -52,9 +56,15 @@
 		"PASystemTest": {
 			"class": "MediaWiki\\Extension\\PublicAnnouncementSystem\\Special\\SpecialPASystemTest",
 			"services": [
-				"MainConfig",
-				"HttpRequestFactory",
+				"PASystem.Config",
 				"PASystem.DiscordNotifier"
+			]
+		},
+		"PASystemConfig": {
+			"class": "MediaWiki\\Extension\\PublicAnnouncementSystem\\Special\\SpecialPASystemConfig",
+			"services": [
+				"PASystem.Config",
+				"PASystem.OnWikiConfigStore"
 			]
 		}
 	},
@@ -69,43 +79,63 @@
 	"config": {
 		"PASystemWebhookUrl": {
 			"value": "",
-			"description": "URL du webhook Discord. Si vide, l'extension est désactivée."
+			"description": "Discord webhook URL (must be HTTPS). If empty, the extension is disabled."
+		},
+		"PASystemWebhookRoutes": {
+			"value": {},
+			"description": "Optional map of action kinds to dedicated webhook URLs (HTTPS). Kinds: edit, new, upload, delete, restore, move, protect, unprotect, block, unblock, newuser, rights, log, flood. Kinds without a route fall back to PASystemWebhookUrl. Example: {\"block\": \"https://discord.com/api/webhooks/…\", \"delete\": \"https://discord.com/api/webhooks/…\"}."
 		},
 		"PASystemBotName": {
-			"value": "Marcus",
-			"description": "Nom affiché du bot dans Discord."
+			"value": "",
+			"description": "Display name of the bot in Discord. If empty, the wiki's $wgSitename is used."
 		},
 		"PASystemBotAvatarUrl": {
 			"value": "",
-			"description": "URL de l'avatar Discord (optionnel)."
+			"description": "URL of the Discord avatar (optional)."
 		},
 		"PASystemWikiBaseUrl": {
 			"value": "",
-			"description": "URL de base du wiki pour générer les liens (ex: https://fallout-wiki.com). Si vide, déduit de $wgServer + $wgArticlePath."
+			"description": "Base URL of the wiki used to build links (e.g. https://example.org). If empty, derived from $wgServer + $wgScriptPath."
+		},
+		"PASystemIncludedNamespaces": {
+			"value": [],
+			"description": "Namespace allowlist: when non-empty, only changes in these namespace numbers are announced (e.g. [0] for the main namespace only). Empty = all namespaces."
 		},
 		"PASystemExcludedNamespaces": {
 			"value": [],
-			"description": "Liste des numéros de namespaces à exclure (ex: [2, 3] pour exclure User et User_talk)."
+			"description": "List of namespace numbers to exclude (e.g. [2, 3] to exclude User and User_talk)."
 		},
 		"PASystemExcludedUsers": {
 			"value": [],
-			"description": "Liste des noms d'utilisateurs à exclure des notifications."
+			"description": "List of user names to exclude from notifications."
 		},
 		"PASystemExcludedLogTypes": {
 			"value": [],
-			"description": "Types de logs à exclure (ex: ['patrol', 'thanks'])."
+			"description": "Log types to exclude (e.g. ['patrol', 'thanks'])."
 		},
 		"PASystemNotifyBots": {
 			"value": false,
-			"description": "Notifier les modifications faites par des comptes bots."
+			"description": "Notify edits made by bot accounts."
 		},
 		"PASystemNotifyMinor": {
 			"value": true,
-			"description": "Notifier les modifications mineures."
+			"description": "Notify minor edits."
+		},
+		"PASystemNotifyCategorization": {
+			"value": false,
+			"description": "Notify category membership changes (RC_CATEGORIZE rows). Off by default: a single edit can produce several of these technical entries."
+		},
+		"PASystemNotifyExternal": {
+			"value": false,
+			"description": "Notify external changes (RC_EXTERNAL rows, e.g. Wikidata updates)."
+		},
+		"PASystemMaxPerMinute": {
+			"value": 0,
+			"description": "Maximum number of announcements per minute (fixed window, shared across requests via the main object stash). When the cap is crossed, a single flood notice is sent and further announcements are dropped until the window resets. 0 = unlimited."
 		},
 		"PASystemMinDiffSize": {
 			"value": 0,
-			"description": "Taille minimale (octets) du diff pour notifier. 0 = notifier toutes les modifs."
+			"description": "Minimum diff size (bytes) required to notify. 0 = notify all edits."
 		},
 		"PASystemEmbedColors": {
 			"value": {
@@ -119,23 +149,31 @@
 				"block": 10038562,
 				"protect": 15844367
 			},
-			"description": "Couleurs hex (decimal) des embeds par type d'action."
+			"description": "Embed colors (decimal RGB) per action kind. Merged over the defaults, so you can override only the keys you need."
+		},
+		"PASystemActionIcons": {
+			"value": {},
+			"description": "Emoji/icon shown per action kind (edit, new, upload, delete, restore, move, protect, unprotect, block, unblock, newuser, rights, log). Merged over the defaults, so you can override only the keys you need. Example: {\"edit\": \"✏️\"}."
+		},
+		"PASystemDisplay": {
+			"value": {},
+			"description": "Display toggles, merged over the defaults. Keys (all true by default): 'icons' (emoji before each announcement), 'delta' (byte difference), 'summary' (edit summary), 'diffLink' (link to the diff), 'links' (links field in embed format), 'flags' (m/b flags in embed format), 'footer' (embed footer), 'timestamp' (embed timestamp). Example: {\"icons\": false, \"delta\": false}."
 		},
 		"PASystemDebug": {
 			"value": false,
-			"description": "Active les logs verbeux dans le canal de log PASystem."
+			"description": "Enable verbose logging in the PublicAnnouncementSystem log channel."
 		},
 		"PASystemDeliveryMode": {
 			"value": "immediate",
-			"description": "Mode d'envoi : 'immediate' (DeferredUpdate POSTSEND, latence < 1s, sans retry) ou 'job' (JobQueue, retry automatique mais latence dépend du JobRunner)."
+			"description": "Delivery mode: 'immediate' (POSTSEND DeferredUpdate, latency < 1s, no retry) or 'job' (JobQueue, automatic retries but latency depends on the JobRunner)."
 		},
 		"PASystemFormat": {
 			"value": "line",
-			"description": "Format des messages Discord : 'line' (message texte compact sur une ligne, défaut) ou 'embed' (embed riche détaillé avec champs)."
+			"description": "Discord message format: 'line' (compact one-line text message, default) or 'embed' (rich detailed embed with fields)."
 		},
 		"PASystemStripAutoSummaries": {
 			"value": true,
-			"description": "Masque les résumés auto-générés par MediaWiki (style « Page créée avec ‹contenu› » pour les créations). Les commentaires saisis manuellement restent toujours affichés. Mettre à false pour TOUT afficher, y compris les extraits de contenu."
+			"description": "Hide summaries auto-generated by MediaWiki (e.g. \"Created page with '...'\"). Detection is based on the core autosumm-* messages in the wiki's content language. Manually entered summaries are always shown. Set to false to show everything, including content excerpts."
 		}
 	},
 	"ConfigRegistry": {

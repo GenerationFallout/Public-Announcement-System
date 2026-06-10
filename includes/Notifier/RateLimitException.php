@@ -7,8 +7,8 @@ namespace MediaWiki\Extension\PublicAnnouncementSystem\Notifier;
 use RuntimeException;
 
 /**
- * Levée par le DiscordNotifier quand Discord retourne un HTTP 429.
- * Permet au Job de récupérer le délai d'attente recommandé.
+ * Thrown by DiscordNotifier when Discord returns an HTTP 429.
+ * Lets the Job recover the recommended waiting delay.
  */
 class RateLimitException extends RuntimeException {
 

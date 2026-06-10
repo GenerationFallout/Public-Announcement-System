@@ -4,20 +4,20 @@ declare( strict_types = 1 );
 
 namespace MediaWiki\Extension\PublicAnnouncementSystem\Notifier;
 
-use Config;
+use MediaWiki\Config\Config;
 use MediaWiki\Http\HttpRequestFactory;
 use Psr\Log\LoggerInterface;
 use RuntimeException;
 
 /**
- * Envoie un payload Discord via webhook HTTPS.
+ * Sends a Discord payload through an HTTPS webhook.
  *
- * Gère :
- *   - Le rate limit Discord (HTTP 429 → throw RateLimitException, le Job
- *     reprogramme à plus tard)
- *   - Les erreurs serveur (5xx → throw, le Job retry)
- *   - Les erreurs client définitives (4xx hors 429 → throw, mais le Job
- *     n'a pas vocation à retry indéfiniment)
+ * Handles:
+ *   - The Discord rate limit (HTTP 429 → throws RateLimitException, the Job
+ *     reschedules for later)
+ *   - Server errors (5xx → throw, the Job retries)
+ *   - Permanent client errors (4xx other than 429 → throw, but the Job is
+ *     not meant to retry forever)
  */
 class DiscordNotifier {
 
@@ -38,18 +38,45 @@ class DiscordNotifier {
 	}
 
 	/**
-	 * Envoie le payload au webhook configuré.
+	 * Sends the payload to the webhook configured for an action kind.
 	 *
-	 * @param array $payload Payload Discord prêt à json_encoder.
-	 * @param string|null $overrideUrl Si fourni, écrase l'URL de config (pour les tests).
+	 * $wgPASystemWebhookRoutes maps action kinds ('edit', 'delete',
+	 * 'block', …, plus 'flood' for flood notices) to dedicated webhook
+	 * URLs; kinds without a route fall back to $wgPASystemWebhookUrl.
+	 * This allows e.g. moderation actions to land in an admin channel
+	 * while regular edits go to a public one.
+	 *
+	 * @param string $kind Action kind (see DiscordEmbedFormatter::getActionKind)
+	 * @param array $payload Discord payload ready to be json_encoded.
 	 * @return void
-	 * @throws RuntimeException En cas d'échec définitif
-	 * @throws RateLimitException En cas de 429 (retry possible)
+	 * @throws RuntimeException On permanent failure
+	 * @throws RateLimitException On 429 (retry possible)
+	 */
+	public function sendForKind( string $kind, array $payload ): void {
+		$routes = $this->config->get( 'PASystemWebhookRoutes' );
+		$url = is_array( $routes ) && !empty( $routes[ $kind ] )
+			? (string)$routes[ $kind ]
+			: null;
+		$this->send( $payload, $url );
+	}
+
+	/**
+	 * Sends the payload to the configured webhook.
+	 *
+	 * @param array $payload Discord payload ready to be json_encoded.
+	 * @param string|null $overrideUrl When provided, overrides the configured URL (route or test).
+	 * @return void
+	 * @throws RuntimeException On permanent failure
+	 * @throws RateLimitException On 429 (retry possible)
 	 */
 	public function send( array $payload, ?string $overrideUrl = null ): void {
 		$url = $overrideUrl ?: $this->config->get( 'PASystemWebhookUrl' );
 		if ( !$url ) {
 			throw new RuntimeException( 'PASystemWebhookUrl is not configured.' );
+		}
+		// Webhook URLs embed a secret token: never send it in clear text.
+		if ( !str_starts_with( $url, 'https://' ) ) {
+			throw new RuntimeException( 'PASystemWebhookUrl must be an HTTPS URL.' );
 		}
 
 		$body = json_encode( $payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
@@ -65,10 +92,10 @@ class DiscordNotifier {
 
 		$request->setHeader( 'Content-Type', 'application/json' );
 
-		$status = $request->execute();
+		$request->execute();
 		$httpCode = (int)$request->getStatus();
 
-		// 2xx → succès
+		// 2xx → success
 		if ( $httpCode >= 200 && $httpCode < 300 ) {
 			if ( $this->config->get( 'PASystemDebug' ) ) {
 				$this->logger->debug( 'Discord notify OK', [ 'http' => $httpCode ] );
@@ -78,7 +105,7 @@ class DiscordNotifier {
 
 		$responseBody = $request->getContent();
 
-		// 429 → rate limit. Discord renvoie un Retry-After (en secondes, parfois flottant).
+		// 429 → rate limit. Discord sends a Retry-After (seconds, sometimes float).
 		if ( $httpCode === 429 ) {
 			$retryAfter = $this->parseRetryAfter( $request, $responseBody );
 			$this->logger->info( 'Discord rate limit hit', [
@@ -88,7 +115,7 @@ class DiscordNotifier {
 			throw new RateLimitException( $retryAfter );
 		}
 
-		// 5xx → erreur serveur, retry pertinent
+		// 5xx → server error, retry makes sense
 		if ( $httpCode >= 500 ) {
 			$this->logger->warning( 'Discord server error', [
 				'http' => $httpCode,
@@ -97,7 +124,7 @@ class DiscordNotifier {
 			throw new RuntimeException( "Discord HTTP $httpCode (server error)" );
 		}
 
-		// 4xx → erreur permanente, on log et on lève
+		// 4xx → permanent error, log and throw
 		$this->logger->error( 'Discord client error', [
 			'http'    => $httpCode,
 			'body'    => substr( $responseBody, 0, 500 ),
@@ -106,8 +133,13 @@ class DiscordNotifier {
 		throw new RuntimeException( "Discord HTTP $httpCode: " . substr( $responseBody, 0, 200 ) );
 	}
 
+	/**
+	 * @param \MWHttpRequest $request
+	 * @param string $responseBody
+	 * @return float Recommended delay in seconds before retrying
+	 */
 	private function parseRetryAfter( $request, string $responseBody ): float {
-		// Discord renvoie le délai dans le body JSON ET dans le header Retry-After
+		// Discord sends the delay both in the JSON body AND the Retry-After header
 		$decoded = json_decode( $responseBody, true );
 		if ( is_array( $decoded ) && isset( $decoded['retry_after'] ) ) {
 			return (float)$decoded['retry_after'];
@@ -116,7 +148,7 @@ class DiscordNotifier {
 		if ( $header !== null ) {
 			return (float)$header;
 		}
-		// Par défaut, 5s
+		// Default to 5s
 		return 5.0;
 	}
 }

@@ -5,8 +5,8 @@ declare( strict_types = 1 );
 namespace MediaWiki\Extension\PublicAnnouncementSystem\Filter;
 
 /**
- * Décision binaire du filtre : on notifie ou pas, avec raison textuelle
- * pour le debug.
+ * Binary decision of the filter: notify or not, with a textual reason for
+ * debugging.
  */
 class FilterDecision {
 
