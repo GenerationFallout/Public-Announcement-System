@@ -48,8 +48,22 @@ a single wiki and can be installed on any MediaWiki ≥ 1.43, in any language.
   minus-x) and a GitHub Actions CI workflow (lint + phpcs + unit tests
   against MediaWiki REL1_43).
 
+### Security
+
+- **Masked-link injection fixed**: Discord renders markdown links
+  (`[text](url)`) in webhook content and embed fields, so an edit summary
+  like `[click here](https://evil.example)` would have displayed an
+  arbitrary clickable link in the channel. Square brackets are now escaped
+  in summaries (both formats — the embed summary field was previously not
+  escaped at all), and link labels are markdown-escaped as well.
+- The webhook URL must now use HTTPS (webhook URLs embed a secret token
+  that must never travel in clear text).
+
 ### Fixed
 
+- Rate-limited notifications are no longer lost on JobQueue backends
+  without delayed-job support (e.g. the default DB queue): the retry job
+  is requeued without a delay instead of throwing.
 - **Embed format**: links in the links field were built with raw markdown
   `[label](url)`, so page titles containing parentheses (e.g.
   `Vulpes Inculta (Fallout: New Vegas)`) produced broken links in Discord.

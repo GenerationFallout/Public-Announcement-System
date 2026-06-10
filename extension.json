@@ -71,7 +71,7 @@
 	"config": {
 		"PASystemWebhookUrl": {
 			"value": "",
-			"description": "Discord webhook URL. If empty, the extension is disabled."
+			"description": "Discord webhook URL (must be HTTPS). If empty, the extension is disabled."
 		},
 		"PASystemBotName": {
 			"value": "",

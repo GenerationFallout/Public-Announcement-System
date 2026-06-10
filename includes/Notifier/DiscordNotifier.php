@@ -51,6 +51,10 @@ class DiscordNotifier {
 		if ( !$url ) {
 			throw new RuntimeException( 'PASystemWebhookUrl is not configured.' );
 		}
+		// Webhook URLs embed a secret token: never send it in clear text.
+		if ( !str_starts_with( $url, 'https://' ) ) {
+			throw new RuntimeException( 'PASystemWebhookUrl must be an HTTPS URL.' );
+		}
 
 		$body = json_encode( $payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
 		if ( $body === false ) {

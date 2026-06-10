@@ -75,6 +75,21 @@ class DiscordNotifierTest extends MediaWikiUnitTestCase {
 		$notifier->send( [ 'content' => 'x' ] );
 	}
 
+	public function testRejectsNonHttpsWebhookUrl(): void {
+		$notifier = new DiscordNotifier(
+			new HashConfig( [
+				'PASystemWebhookUrl' => 'http://discord.com/api/webhooks/123/abc',
+				'PASystemDebug'      => false,
+			] ),
+			$this->createMock( HttpRequestFactory::class ),
+			new NullLogger()
+		);
+
+		$this->expectException( RuntimeException::class );
+		$this->expectExceptionMessage( 'must be an HTTPS URL' );
+		$notifier->send( [ 'content' => 'x' ] );
+	}
+
 	public function testRateLimitUsesRetryAfterFromBody(): void {
 		$notifier = $this->makeNotifier( 429, '{"retry_after": 2.5}' );
 

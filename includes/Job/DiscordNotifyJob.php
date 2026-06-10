@@ -102,11 +102,16 @@ class DiscordNotifyJob extends Job {
 		}
 
 		$params['_rl_attempts'] = $attempts;
-		$params['jobReleaseTimestamp'] = time() + max( 1, $delaySeconds );
 
-		$newJob = new self( $this->title, $params );
-		MediaWikiServices::getInstance()
-			->getJobQueueGroup()
-			->push( $newJob );
+		$jobQueueGroup = MediaWikiServices::getInstance()->getJobQueueGroup();
+		// Not all JobQueue backends support delayed jobs (the default DB
+		// queue does not). Without the guard, push() would throw and the
+		// notification would be lost; pushing without a delay just means the
+		// next attempt may hit the rate limit again (capped at 5 attempts).
+		if ( $jobQueueGroup->get( self::COMMAND )->delayedJobsEnabled() ) {
+			$params['jobReleaseTimestamp'] = time() + max( 1, $delaySeconds );
+		}
+
+		$jobQueueGroup->push( new self( $this->title, $params ) );
 	}
 }

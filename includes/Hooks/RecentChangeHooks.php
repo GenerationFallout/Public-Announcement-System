@@ -153,13 +153,13 @@ class RecentChangeHooks implements RecentChange_saveHook {
 						'rc_id'       => $params['rc_id'] ?? null,
 						'retry_after' => $rl->getRetryAfter(),
 					] );
-					$job = new DiscordNotifyJob(
-						$title,
-						$params + [ 'jobReleaseTimestamp' => time() + (int)ceil( $rl->getRetryAfter() ) ]
-					);
-					MediaWikiServices::getInstance()
-						->getJobQueueGroup()
-						->push( $job );
+					$jobQueueGroup = MediaWikiServices::getInstance()->getJobQueueGroup();
+					// Delayed jobs are not supported by every backend (the
+					// default DB queue rejects jobReleaseTimestamp).
+					if ( $jobQueueGroup->get( DiscordNotifyJob::COMMAND )->delayedJobsEnabled() ) {
+						$params['jobReleaseTimestamp'] = time() + (int)ceil( $rl->getRetryAfter() );
+					}
+					$jobQueueGroup->push( new DiscordNotifyJob( $title, $params ) );
 				} catch ( \Throwable $e ) {
 					$logger->warning( 'Immediate Discord notify failed (no retry)', [
 						'rc_id' => $params['rc_id'] ?? null,

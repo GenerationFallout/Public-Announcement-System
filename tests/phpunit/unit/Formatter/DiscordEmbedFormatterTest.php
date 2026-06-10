@@ -202,6 +202,29 @@ class DiscordEmbedFormatterTest extends MediaWikiUnitTestCase {
 		$this->assertStringContainsString( '\\`code\\`', $payload['content'] );
 	}
 
+	public function testMaskedLinkInSummaryIsNeutralized(): void {
+		$payload = $this->makeFormatter()->build( $this->makeEditParams( [
+			'rc_comment' => '[click here](https://evil.example/phish)',
+		] ) );
+
+		// Discord renders masked links in webhook content: the brackets must
+		// be escaped so no clickable link can be smuggled in.
+		$this->assertStringNotContainsString( '[click here](', $payload['content'] );
+		$this->assertStringContainsString( '\\[click here\\]', $payload['content'] );
+	}
+
+	public function testMaskedLinkInEmbedSummaryIsNeutralized(): void {
+		$payload = $this->makeFormatter( [
+			'PASystemFormat'  => 'embed',
+			'PASystemDisplay' => [ 'links' => false ],
+		] )->build( $this->makeEditParams( [
+			'rc_comment' => '[click here](https://evil.example/phish)',
+		] ) );
+
+		$summaryField = $payload['embeds'][0]['fields'][1];
+		$this->assertStringNotContainsString( '[click here](', $summaryField['value'] );
+	}
+
 	public function testIconsCanBeDisabled(): void {
 		$payload = $this->makeFormatter( [ 'PASystemDisplay' => [ 'icons' => false ] ] )
 			->build( $this->makeEditParams() );

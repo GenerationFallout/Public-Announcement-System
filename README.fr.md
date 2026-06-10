@@ -44,7 +44,7 @@ Tous les réglages se font dans `LocalSettings.php`.
 
 | Réglage | Défaut | Description |
 |---|---|---|
-| `$wgPASystemWebhookUrl` | `''` | URL du webhook Discord. Vide = extension désactivée. |
+| `$wgPASystemWebhookUrl` | `''` | URL du webhook Discord (HTTPS obligatoire). Vide = extension désactivée. |
 | `$wgPASystemBotName` | `''` | Nom affiché du bot dans Discord. Vide = utilise `$wgSitename`. |
 | `$wgPASystemBotAvatarUrl` | `''` | URL de l'avatar du bot (optionnel). |
 | `$wgPASystemWikiBaseUrl` | `''` | URL de base pour les liens. Vide = déduite de `$wgServer` + `$wgScriptPath`. |

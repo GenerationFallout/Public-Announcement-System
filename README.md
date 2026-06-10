@@ -44,7 +44,7 @@ All settings go in `LocalSettings.php`.
 
 | Setting | Default | Description |
 |---|---|---|
-| `$wgPASystemWebhookUrl` | `''` | Discord webhook URL. Empty = extension disabled. |
+| `$wgPASystemWebhookUrl` | `''` | Discord webhook URL (must be HTTPS). Empty = extension disabled. |
 | `$wgPASystemBotName` | `''` | Bot display name in Discord. Empty = uses `$wgSitename`. |
 | `$wgPASystemBotAvatarUrl` | `''` | Avatar URL for the bot (optional). |
 | `$wgPASystemWikiBaseUrl` | `''` | Base URL used for links. Empty = derived from `$wgServer` + `$wgScriptPath`. |
