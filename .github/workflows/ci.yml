@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  lint:
+    name: Lint & code style
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          tools: composer
+
+      - name: Install dev dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Lint & phpcs & minus-x
+        run: composer test
+
+  phpunit:
+    name: PHPUnit (MediaWiki ${{ matrix.mw }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - mw: REL1_43
+            php: '8.1'
+    steps:
+      - name: Checkout MediaWiki core
+        uses: actions/checkout@v4
+        with:
+          repository: wikimedia/mediawiki
+          ref: ${{ matrix.mw }}
+          path: mediawiki
+
+      - name: Checkout extension
+        uses: actions/checkout@v4
+        with:
+          path: mediawiki/extensions/PublicAnnouncementSystem
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: mbstring, intl
+          tools: composer
+
+      - name: Install MediaWiki dependencies
+        working-directory: mediawiki
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Run unit tests
+        working-directory: mediawiki
+        run: composer phpunit:unit -- extensions/PublicAnnouncementSystem/tests/phpunit/unit

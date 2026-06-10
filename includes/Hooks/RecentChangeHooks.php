@@ -4,32 +4,37 @@ declare( strict_types = 1 );
 
 namespace MediaWiki\Extension\PublicAnnouncementSystem\Hooks;
 
-use Config;
 use JobQueueGroup;
+use MediaWiki\Config\Config;
+use MediaWiki\Deferred\DeferredUpdates;
 use MediaWiki\Extension\PublicAnnouncementSystem\Filter\ChangeFilter;
+use MediaWiki\Extension\PublicAnnouncementSystem\Job\DiscordNotifyJob;
+use MediaWiki\Extension\PublicAnnouncementSystem\Notifier\RateLimitException;
 use MediaWiki\Hook\RecentChange_saveHook;
 use MediaWiki\Logger\LoggerFactory;
+use MediaWiki\MediaWikiServices;
+use MediaWiki\Title\Title;
 use Psr\Log\LoggerInterface;
 use RecentChange;
 
 /**
- * Handler du hook RecentChange_save.
+ * Handler for the RecentChange_save hook.
  *
- * Appelé par MediaWiki à chaque fois qu'une ligne est ajoutée dans la table
- * recentchanges. Ce hook est void — on observe sans pouvoir annuler.
+ * Called by MediaWiki each time a row is added to the recentchanges table.
+ * This hook is void — we observe without being able to abort.
  *
- * Stratégie :
- *   1. Sortie rapide si l'extension n'est pas configurée (webhook URL vide).
- *   2. Filtrage configurable (namespaces, users, log types, bots, mineures).
- *   3. Dispatch selon $wgPASystemDeliveryMode :
- *      - 'immediate' (défaut) : DeferredUpdate POSTSEND, l'envoi se fait
- *        après la réponse HTTP à l'utilisateur, dans le même process. Latence
- *        typique : 50ms à 1s. Sans retry sur erreur.
- *      - 'job' : JobQueue, retry natif sur 5xx et 429, mais latence dépend
- *        du runner (`runJobs.php` en cron).
+ * Strategy:
+ *   1. Fast exit when the extension is not configured (empty webhook URL).
+ *   2. Configurable filtering (namespaces, users, log types, bots, minor).
+ *   3. Dispatch according to $wgPASystemDeliveryMode:
+ *      - 'immediate' (default): POSTSEND DeferredUpdate, the call happens
+ *        after the HTTP response was sent to the user, in the same process.
+ *        Typical latency: 50ms to 1s. No retry on failure.
+ *      - 'job': JobQueue, native retries on 5xx and 429, but latency
+ *        depends on the runner (`runJobs.php` cron).
  *
- * **Aucun appel réseau dans le hook lui-même** : ça allongerait la durée de
- * sauvegarde des pages, ce que l'utilisateur subirait directement.
+ * **No network call inside the hook itself**: it would lengthen the page
+ * save duration, which the user would directly experience.
  */
 class RecentChangeHooks implements RecentChange_saveHook {
 
@@ -54,13 +59,13 @@ class RecentChangeHooks implements RecentChange_saveHook {
 	 * @return void
 	 */
 	public function onRecentChange_save( $recentChange ): void {
-		// Extension désactivée si aucun webhook
+		// Extension disabled when no webhook is configured
 		$webhookUrl = $this->config->get( 'PASystemWebhookUrl' );
 		if ( !$webhookUrl ) {
 			return;
 		}
 
-		// Filtrage configurable (namespaces, users, log types, bots, minor, diff size)
+		// Configurable filtering (namespaces, users, log types, bots, minor, diff size)
 		$decision = $this->filter->shouldNotify( $recentChange );
 		if ( !$decision->isAllowed() ) {
 			if ( $this->config->get( 'PASystemDebug' ) ) {
@@ -74,8 +79,8 @@ class RecentChangeHooks implements RecentChange_saveHook {
 			return;
 		}
 
-		// Sérialisation minimale du RecentChange pour passer au formatter / job.
-		// On embarque uniquement les attributs nécessaires.
+		// Minimal serialization of the RecentChange for the formatter / job.
+		// Only the needed attributes are embedded.
 		$params = [
 			'rc_id'           => (int)$recentChange->getAttribute( 'rc_id' ),
 			'rc_type'         => (int)$recentChange->getAttribute( 'rc_type' ),
@@ -120,36 +125,39 @@ class RecentChangeHooks implements RecentChange_saveHook {
 	}
 
 	/**
-	 * Mode "immediate" : DeferredUpdate POSTSEND. L'envoi a lieu juste après
-	 * que MediaWiki ait renvoyé la réponse HTTP à l'utilisateur, dans le même
-	 * process PHP. Latence : 50ms à 1s typiquement. Inconvénient : si le
-	 * process est tué (timeout PHP, crash) ou si Discord répond mal, on perd
-	 * la notification (pas de retry).
+	 * "immediate" mode: POSTSEND DeferredUpdate. The call happens right
+	 * after MediaWiki sent the HTTP response to the user, in the same PHP
+	 * process. Latency: typically 50ms to 1s. Downside: if the process is
+	 * killed (PHP timeout, crash) or Discord misbehaves, the notification
+	 * is lost (no retry).
 	 *
-	 * On wrap dans un try/catch défensif pour ne JAMAIS faire planter
-	 * MediaWiki post-send même si Discord est cassé.
+	 * Wrapped in a defensive try/catch so MediaWiki NEVER crashes post-send
+	 * even when Discord is broken.
+	 *
+	 * @param Title $title
+	 * @param array $params
 	 */
-	private function dispatchImmediate( $title, array $params ): void {
-		\MediaWiki\Deferred\DeferredUpdates::addCallableUpdate(
-			static function () use ( $params ): void {
+	private function dispatchImmediate( Title $title, array $params ): void {
+		DeferredUpdates::addCallableUpdate(
+			static function () use ( $title, $params ): void {
 				$logger = LoggerFactory::getInstance( 'PublicAnnouncementSystem' );
 				try {
-					$services = \MediaWiki\MediaWikiServices::getInstance();
+					$services = MediaWikiServices::getInstance();
 					$formatter = $services->getService( 'PASystem.DiscordEmbedFormatter' );
 					$notifier  = $services->getService( 'PASystem.DiscordNotifier' );
 					$payload   = $formatter->build( $params );
 					$notifier->send( $payload );
-				} catch ( \MediaWiki\Extension\PublicAnnouncementSystem\Notifier\RateLimitException $rl ) {
-					// Rate limit en mode immédiat → on dégrade vers Job pour retry
+				} catch ( RateLimitException $rl ) {
+					// Rate limit in immediate mode → degrade to a Job for retry
 					$logger->info( 'Immediate mode hit rate limit, falling back to job queue', [
 						'rc_id'       => $params['rc_id'] ?? null,
 						'retry_after' => $rl->getRetryAfter(),
 					] );
-					$job = new \MediaWiki\Extension\PublicAnnouncementSystem\Job\DiscordNotifyJob(
-						\Title::newMainPage(),
+					$job = new DiscordNotifyJob(
+						$title,
 						$params + [ 'jobReleaseTimestamp' => time() + (int)ceil( $rl->getRetryAfter() ) ]
 					);
-					\MediaWiki\MediaWikiServices::getInstance()
+					MediaWikiServices::getInstance()
 						->getJobQueueGroup()
 						->push( $job );
 				} catch ( \Throwable $e ) {
@@ -159,19 +167,20 @@ class RecentChangeHooks implements RecentChange_saveHook {
 					] );
 				}
 			},
-			\MediaWiki\Deferred\DeferredUpdates::POSTSEND
+			DeferredUpdates::POSTSEND
 		);
 	}
 
 	/**
-	 * Mode "job" : passe par la JobQueue, retry automatique sur 5xx ou 429
-	 * grâce au mécanisme natif de MediaWiki. Latence dépend du JobRunner.
+	 * "job" mode: goes through the JobQueue, automatic retries on 5xx or
+	 * 429 thanks to MediaWiki's native mechanism. Latency depends on the
+	 * JobRunner.
+	 *
+	 * @param Title $title
+	 * @param array $params
 	 */
-	private function dispatchJob( $title, array $params ): void {
-		$job = new \MediaWiki\Extension\PublicAnnouncementSystem\Job\DiscordNotifyJob(
-			$title,
-			$params
-		);
+	private function dispatchJob( Title $title, array $params ): void {
+		$job = new DiscordNotifyJob( $title, $params );
 		$this->jobQueueGroup->lazyPush( $job );
 	}
 }

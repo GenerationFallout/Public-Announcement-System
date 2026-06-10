@@ -4,61 +4,116 @@ declare( strict_types = 1 );
 
 namespace MediaWiki\Extension\PublicAnnouncementSystem\Formatter;
 
-use Config;
-use Language;
+use MediaWiki\Config\Config;
+use MediaWiki\Language\Language;
+use MediaWiki\SpecialPage\SpecialPage;
 use MediaWiki\Title\TitleFactory;
 use Psr\Log\LoggerInterface;
+use Wikimedia\Message\ITextFormatter;
+use Wikimedia\Message\MessageValue;
 
 /**
- * Construit le payload Discord (embed) à partir des données sérialisées
- * d'un RecentChange.
+ * Builds the Discord payload (line or embed) from the serialized data of a
+ * RecentChange.
  *
- * On reçoit un array de paramètres (pas un RecentChange) car la classe est
- * appelée depuis un Job, et MediaWiki ne sérialise pas bien les RecentChange
- * en BDD de jobs.
+ * The input is an array of parameters (not a RecentChange object) because the
+ * class is called from a Job, and RecentChange objects do not serialize well
+ * in job queue backends.
+ *
+ * All human-readable text comes from i18n messages rendered in the wiki's
+ * content language, so announcements follow the wiki language and every
+ * sentence can be customized on-wiki by editing the corresponding
+ * MediaWiki:Pasystem-* page. Icons, colors and optional parts of the
+ * announcements are configurable through $wgPASystemActionIcons,
+ * $wgPASystemEmbedColors and $wgPASystemDisplay.
  */
 class DiscordEmbedFormatter {
+
+	/**
+	 * Discord SUPPRESS_EMBEDS flag (1 << 2).
+	 *
+	 * When included in the payload, Discord does not auto-generate preview
+	 * cards for URLs present in `content`. Without it, a message like
+	 * "Alice edited Foo" generates 2-3 useless preview cards below the
+	 * message, polluting the channel.
+	 *
+	 * Note: this flag does NOT affect embeds explicitly sent in the
+	 * `embeds` array of the payload — only the ones auto-generated from
+	 * `content`.
+	 */
+	private const FLAG_SUPPRESS_EMBEDS = 4;
+
+	/** Default emoji per action kind, overridable via $wgPASystemActionIcons */
+	private const DEFAULT_ICONS = [
+		'edit'      => '📝',
+		'new'       => '🆕',
+		'upload'    => '📤',
+		'delete'    => '🗑️',
+		'restore'   => '♻️',
+		'move'      => '📨',
+		'protect'   => '🔒',
+		'unprotect' => '🔓',
+		'block'     => '🚫',
+		'unblock'   => '✅',
+		'newuser'   => '👤',
+		'rights'    => '🛡️',
+		'log'       => '📋',
+	];
+
+	/** Default display toggles, overridable via $wgPASystemDisplay */
+	private const DEFAULT_DISPLAY = [
+		'icons'     => true,
+		'delta'     => true,
+		'summary'   => true,
+		'diffLink'  => true,
+		'links'     => true,
+		'flags'     => true,
+		'footer'    => true,
+		'timestamp' => true,
+	];
+
+	/** Core messages used to detect auto-generated edit summaries */
+	private const AUTOSUMM_MESSAGES = [
+		'autosumm-new',
+		'autosumm-newblank',
+		'autosumm-blank',
+		'autosumm-replace',
+		'autosumm-removed-redirect',
+		'autosumm-changed-redirect-target',
+	];
 
 	private Config $config;
 	private TitleFactory $titleFactory;
 	private Language $contentLang;
+	private ITextFormatter $msgFormatter;
 	private LoggerInterface $logger;
+
+	/** @var string[]|null Lazy-built list of auto-summary prefixes */
+	private ?array $autoSummaryPrefixes = null;
 
 	public function __construct(
 		Config $config,
 		TitleFactory $titleFactory,
 		Language $contentLang,
+		ITextFormatter $msgFormatter,
 		LoggerInterface $logger
 	) {
 		$this->config = $config;
 		$this->titleFactory = $titleFactory;
 		$this->contentLang = $contentLang;
+		$this->msgFormatter = $msgFormatter;
 		$this->logger = $logger;
 	}
 
 	/**
-	 * Flag Discord SUPPRESS_EMBEDS (1 << 2).
+	 * Builds the full Discord payload from the Job params.
 	 *
-	 * Quand on l'inclut dans le payload, Discord ne génère pas d'aperçus
-	 * automatiques pour les URLs présentes dans `content`. Sans ce flag,
-	 * un message comme "Kims a modifié Canigou" génère 2-3 cartes d'aperçu
-	 * inutiles sous le message, qui polluent le canal.
+	 * Depending on `$wgPASystemFormat`:
+	 *   - 'line'  : compact one-line text message, markdown — default
+	 *   - 'embed' : rich detailed embed
 	 *
-	 * Note : ce flag n'affecte PAS les embeds explicitement envoyés dans le
-	 * tableau `embeds` du payload — seulement ceux générés automatiquement
-	 * à partir du `content`.
-	 */
-	private const FLAG_SUPPRESS_EMBEDS = 4;
-
-	/**
-	 * Construit le payload Discord complet à partir des params du Job.
-	 *
-	 * Selon `$wgPASystemFormat` :
-	 *   - 'line'  : message texte compact (1 ligne), markdown — défaut
-	 *   - 'embed' : embed riche détaillé
-	 *
-	 * @param array $params Données du RecentChange (cf. RecentChangeHooks)
-	 * @return array Payload prêt pour json_encode
+	 * @param array $params RecentChange data (see RecentChangeHooks)
+	 * @return array Payload ready for json_encode
 	 */
 	public function build( array $params ): array {
 		$format = (string)$this->config->get( 'PASystemFormat' );
@@ -69,8 +124,8 @@ class DiscordEmbedFormatter {
 			$payload = $this->buildLinePayload( $params );
 		}
 
-		// Anti-aperçus : on ne veut pas que Discord génère des cartes
-		// automatiques pour les liens wiki présents dans le content.
+		// No auto-previews: we do not want Discord to generate cards for
+		// the wiki links present in the content.
 		$payload['flags'] = self::FLAG_SUPPRESS_EMBEDS;
 
 		$avatar = $this->config->get( 'PASystemBotAvatarUrl' );
@@ -81,194 +136,168 @@ class DiscordEmbedFormatter {
 		return $payload;
 	}
 
+	/**
+	 * Renders an i18n message in the wiki content language.
+	 *
+	 * @param string $key Message key
+	 * @param string ...$msgParams Plaintext parameters
+	 */
+	private function msg( string $key, string ...$msgParams ): string {
+		return $this->msgFormatter->format(
+			MessageValue::new( $key )->plaintextParams( ...$msgParams )
+		);
+	}
+
+	/**
+	 * Reads a display toggle from $wgPASystemDisplay, merged over defaults.
+	 */
+	private function display( string $key ): bool {
+		$configured = $this->config->get( 'PASystemDisplay' );
+		$display = ( is_array( $configured ) ? $configured : [] ) + self::DEFAULT_DISPLAY;
+		return (bool)( $display[ $key ] ?? true );
+	}
+
+	/**
+	 * Bot display name: $wgPASystemBotName, falling back to $wgSitename.
+	 */
+	private function getBotName(): string {
+		$name = (string)$this->config->get( 'PASystemBotName' );
+		return $name !== '' ? $name : (string)$this->config->get( 'Sitename' );
+	}
+
 	/* ============================================================
-	 * Format LIGNE (défaut) — message texte compact sur une ligne
+	 * LINE format (default) — compact one-line text message
 	 * ============================================================ */
 
 	private function buildLinePayload( array $params ): array {
 		$content = $this->buildLineContent( $params );
-		// Discord rejette les messages > 2000 chars dans content. On tronque
-		// à 1990 pour garder une marge (et ajouter ellipse si besoin).
+		// Discord rejects messages > 2000 chars in content. Truncate to 1990
+		// to keep a margin (and add an ellipsis if needed).
 		if ( mb_strlen( $content ) > 1990 ) {
 			$content = mb_substr( $content, 0, 1989 ) . '…';
 		}
 		return [
-			'username'         => $this->config->get( 'PASystemBotName' ),
+			'username'         => $this->getBotName(),
 			'content'          => $content,
 			'allowed_mentions' => [ 'parse' => [] ],
 		];
 	}
 
 	private function buildLineContent( array $params ): string {
-		$rcType = (int)$params['rc_type'];
-		$logType = (string)$params['rc_log_type'];
-		$logAction = (string)$params['rc_log_action'];
-
-		$kind = $this->resolveActionKind( $rcType, $logType, $logAction );
+		$kind = $this->getActionKindFromParams( $params );
 		$icon = $this->getActionIcon( $kind );
 		$userText = (string)$params['rc_user_text'];
 		$userLink = $this->makeMdLink( $userText, $this->getUserUrl( $userText ) );
+		$summary = $this->summarySuffix( $params );
+		$pageLink = $this->makeMdLink(
+			$this->getPrefixedTitle( $params ),
+			$this->getPageUrl( $params )
+		);
 
 		switch ( $kind ) {
 			case 'edit':
-				return $this->lineForEdit( $params, $icon, $userLink, true );
+				$line = $this->lineForEdit( $params, $icon, $userLink, true );
+				break;
 
 			case 'new':
-				return $this->lineForEdit( $params, $icon, $userLink, false );
-
-			case 'upload':
-				return sprintf(
-					'%s %s a téléversé %s%s',
-					$icon,
-					$userLink,
-					$this->makeMdLink(
-						$this->getPrefixedTitle( $params ),
-						$this->getPageUrl( $params )
-					),
-					$this->summarySuffix( $params )
-				);
-
-			case 'delete':
-				return sprintf(
-					'%s %s a supprimé %s%s',
-					$icon,
-					$userLink,
-					$this->makeMdLink(
-						'« ' . $this->getPrefixedTitle( $params ) . ' »',
-						$this->getPageUrl( $params )
-					),
-					$this->summarySuffix( $params )
-				);
-
-			case 'restore':
-				return sprintf(
-					'%s %s a restauré %s%s',
-					$icon,
-					$userLink,
-					$this->makeMdLink(
-						$this->getPrefixedTitle( $params ),
-						$this->getPageUrl( $params )
-					),
-					$this->summarySuffix( $params )
-				);
+				$line = $this->lineForEdit( $params, $icon, $userLink, false );
+				break;
 
 			case 'move':
-				return $this->lineForMove( $params, $icon, $userLink );
-
-			case 'protect':
-				return sprintf(
-					'%s %s a protégé %s%s',
-					$icon,
-					$userLink,
-					$this->makeMdLink(
-						$this->getPrefixedTitle( $params ),
-						$this->getPageUrl( $params )
-					),
-					$this->summarySuffix( $params )
-				);
-
-			case 'unprotect':
-				return sprintf(
-					'%s %s a déprotégé %s%s',
-					$icon,
-					$userLink,
-					$this->makeMdLink(
-						$this->getPrefixedTitle( $params ),
-						$this->getPageUrl( $params )
-					),
-					$this->summarySuffix( $params )
-				);
+				$line = $this->lineForMove( $params, $icon, $userLink );
+				break;
 
 			case 'block':
-				return sprintf(
-					'%s %s a bloqué `%s`%s',
-					$icon,
-					$userLink,
-					(string)$params['rc_title'],
-					$this->summarySuffix( $params )
-				);
+				$line = $this->msg( 'pasystem-line-block',
+					$icon, $userLink, '`' . (string)$params['rc_title'] . '`', $summary );
+				break;
 
 			case 'unblock':
-				return sprintf(
-					'%s %s a débloqué `%s`%s',
-					$icon,
-					$userLink,
-					(string)$params['rc_title'],
-					$this->summarySuffix( $params )
-				);
+				$line = $this->msg( 'pasystem-line-unblock',
+					$icon, $userLink, '`' . (string)$params['rc_title'] . '`', $summary );
+				break;
 
 			case 'newuser':
-				// Le user créé EST le user qui s'inscrit (rc_user_text)
-				return sprintf(
-					'%s %s a rejoint le wiki — bienvenue !',
-					$icon,
-					$userLink
-				);
+				// The created user IS the user signing up (rc_user_text)
+				$line = $this->msg( 'pasystem-line-newuser', $icon, $userLink );
+				break;
 
 			case 'rights':
-				return sprintf(
-					'%s %s a modifié les droits de %s%s',
+				$line = $this->msg( 'pasystem-line-rights',
 					$icon,
 					$userLink,
 					$this->makeMdLink(
 						(string)$params['rc_title'],
 						$this->getUserUrl( (string)$params['rc_title'] )
 					),
-					$this->summarySuffix( $params )
+					$summary
 				);
+				break;
+
+			case 'upload':
+			case 'delete':
+			case 'restore':
+			case 'protect':
+			case 'unprotect':
+				$line = $this->msg( "pasystem-line-$kind",
+					$icon, $userLink, $pageLink, $summary );
+				break;
 
 			default:
-				return sprintf(
-					'%s %s a effectué une action%s',
-					$icon,
-					$userLink,
-					$this->summarySuffix( $params )
-				);
+				$line = $this->msg( 'pasystem-line-log', $icon, $userLink, $summary );
+				break;
 		}
+
+		return $this->cleanupLine( $line );
 	}
 
 	/**
-	 * Construit la ligne pour une édition normale ou une nouvelle page.
-	 * Format : ICON **User** {verbe} [Page](url) `±X octets` — Résumé tronqué ([diff](url))
+	 * Builds the line for a normal edit or a new page.
+	 * Default rendering: ICON [User](url) edited [Page](url) `±X` — Summary ([diff](url))
 	 */
 	private function lineForEdit( array $params, string $icon, string $userLink, bool $withDiff ): string {
-		$verb = $withDiff ? 'a modifié' : 'a créé';
 		$pageLink = $this->makeMdLink(
 			$this->getPrefixedTitle( $params ),
 			$this->getPageUrl( $params )
 		);
 
-		$delta = (int)$params['rc_new_len'] - (int)$params['rc_old_len'];
-		$deltaStr = $this->formatDeltaCompact( $delta );
-
-		$diffLink = '';
-		if ( $withDiff && (int)$params['rc_this_oldid'] > 0 && (int)$params['rc_last_oldid'] > 0 ) {
-			$diffLink = ' (' . $this->makeMdLink( 'diff', $this->getDiffUrl( $params ) ) . ')';
+		$deltaStr = '';
+		if ( $this->display( 'delta' ) ) {
+			$delta = (int)$params['rc_new_len'] - (int)$params['rc_old_len'];
+			$deltaStr = ' ' . $this->formatDeltaCompact( $delta );
 		}
 
-		return sprintf(
-			'%s %s %s %s %s%s%s',
-			$icon,
-			$userLink,
-			$verb,
-			$pageLink,
-			$deltaStr,
-			$this->summarySuffix( $params ),
-			$diffLink
-		);
+		$summary = $this->summarySuffix( $params );
+
+		if ( !$withDiff ) {
+			return $this->msg( 'pasystem-line-new',
+				$icon, $userLink, $pageLink, $deltaStr, $summary );
+		}
+
+		$diffSuffix = '';
+		if ( $this->display( 'diffLink' )
+			&& (int)$params['rc_this_oldid'] > 0
+			&& (int)$params['rc_last_oldid'] > 0
+		) {
+			$diffSuffix = ' ' . $this->msg( 'pasystem-line-diff',
+				$this->makeMdLink( $this->msg( 'pasystem-link-diff' ), $this->getDiffUrl( $params ) )
+			);
+		}
+
+		return $this->msg( 'pasystem-line-edit',
+			$icon, $userLink, $pageLink, $deltaStr, $summary, $diffSuffix );
 	}
 
 	/**
-	 * Pour les renommages, le titre nouveau est dans rc_params (sérialisé PHP/JSON).
-	 * On essaie de le récupérer, sinon on tombe sur un format dégradé.
+	 * For page moves, the new title lives in rc_params (PHP/JSON serialized).
+	 * We try to extract it, otherwise fall back to a degraded format.
 	 */
 	private function lineForMove( array $params, string $icon, string $userLink ): string {
 		$oldTitle = $this->getPrefixedTitle( $params );
 		$newTitle = $this->extractMoveTarget( (string)$params['rc_params'] );
 
 		if ( $newTitle ) {
-			$arrow = sprintf(
-				'%s → %s',
+			$arrow = $this->msg( 'pasystem-line-move-arrow',
 				$this->makeMdLink( $oldTitle, $this->getPageUrl( $params ) ),
 				$this->makeMdLink( $newTitle, $this->getPageUrlFromText( $newTitle ) )
 			);
@@ -276,22 +305,18 @@ class DiscordEmbedFormatter {
 			$arrow = $this->makeMdLink( $oldTitle, $this->getPageUrl( $params ) );
 		}
 
-		return sprintf(
-			'%s %s a renommé %s%s',
-			$icon,
-			$userLink,
-			$arrow,
-			$this->summarySuffix( $params )
-		);
+		return $this->msg( 'pasystem-line-move',
+			$icon, $userLink, $arrow, $this->summarySuffix( $params ) );
 	}
 
 	private function extractMoveTarget( string $rcParams ): ?string {
 		if ( $rcParams === '' ) {
 			return null;
 		}
-		// rc_params peut être en PHP serialize ou JSON selon l'âge de MW.
-		// allowed_classes => false : sécurité contre les POP chains, on ne veut
-		// que des arrays/scalaires de toute façon.
+		// rc_params may be PHP-serialized or JSON depending on the MW version.
+		// allowed_classes => false: protection against POP chains, we only
+		// expect arrays/scalars anyway.
+		// phpcs:ignore Generic.PHP.NoSilencedErrors.Discouraged
 		$decoded = @unserialize( $rcParams, [ 'allowed_classes' => false ] );
 		if ( !is_array( $decoded ) ) {
 			$decoded = json_decode( $rcParams, true );
@@ -299,7 +324,7 @@ class DiscordEmbedFormatter {
 		if ( !is_array( $decoded ) ) {
 			return null;
 		}
-		// Plusieurs clés possibles selon la version : 'target', '4::target', 'new_title'
+		// Several possible keys depending on the version: 'target', '4::target', 'new_title'
 		foreach ( [ 'target', '4::target', 'new_title', 'newTitle' ] as $k ) {
 			if ( isset( $decoded[ $k ] ) && is_string( $decoded[ $k ] ) ) {
 				return $decoded[ $k ];
@@ -309,74 +334,64 @@ class DiscordEmbedFormatter {
 	}
 
 	private function formatDeltaCompact( int $delta ): string {
+		$formatted = $this->contentLang->formatNum( abs( $delta ) );
 		if ( $delta > 0 ) {
-			return '`+' . number_format( $delta, 0, ',', "\u{202F}" ) . '`';
+			return '`+' . $formatted . '`';
 		}
 		if ( $delta < 0 ) {
-			return '`−' . number_format( abs( $delta ), 0, ',', "\u{202F}" ) . '`';
+			return '`−' . $formatted . '`';
 		}
-		return '`±0`';
+		return '`±' . $formatted . '`';
 	}
 
 	/**
-	 * Suffixe " — Résumé tronqué". Vide si :
-	 *   - aucun résumé, ou
-	 *   - résumé auto-généré par MediaWiki ET StripAutoSummaries activé
+	 * " — Truncated summary" suffix (with leading space). Empty when:
+	 *   - the 'summary' display toggle is off, or
+	 *   - there is no summary, or
+	 *   - the summary was auto-generated by MediaWiki AND StripAutoSummaries
+	 *     is enabled
 	 *
-	 * Les résumés auto-générés sont ceux que MW pré-remplit quand l'utilisateur
-	 * n'a rien saisi (typiquement « Page créée avec « ‹début du contenu› » »
-	 * pour une création). On veut les filtrer pour ne montrer que les vrais
-	 * commentaires humains.
+	 * Auto-generated summaries are the ones MW pre-fills when the user typed
+	 * nothing (typically "Created page with '<content excerpt>'"). We filter
+	 * them out to only show real human comments.
 	 *
-	 * Tronqué à ~80 chars pour rester sur une ligne dans Discord.
+	 * Truncated to ~80 chars to stay on one line in Discord.
 	 */
 	private function summarySuffix( array $params ): string {
+		if ( !$this->display( 'summary' ) ) {
+			return '';
+		}
+
 		$comment = trim( (string)$params['rc_comment'] );
 		if ( $comment === '' ) {
 			return '';
 		}
 
-		// Filtrage des résumés auto-MW (uniquement si l'option est activée)
-		if ( (bool)$this->config->get( 'PASystemStripAutoSummaries' ) ) {
-			$actionKind = $this->resolveActionKind(
-				(int)$params['rc_type'],
-				(string)$params['rc_log_type'],
-				(string)$params['rc_log_action']
-			);
-			if ( $this->isAutoGeneratedSummary( $comment, $actionKind ) ) {
-				return '';
-			}
+		if ( (bool)$this->config->get( 'PASystemStripAutoSummaries' )
+			&& $this->isAutoGeneratedSummary( $comment )
+		) {
+			return '';
 		}
 
 		$comment = $this->truncate( $comment, 80 );
-		// Échapper le markdown du résumé pour éviter qu'un résumé contenant
-		// des * ou _ ne casse le rendu.
+		// Escape the summary's markdown so a summary containing * or _
+		// does not break the rendering.
 		$comment = $this->escapeMarkdown( $comment );
-		return ' — ' . $comment;
+		return ' ' . $this->msg( 'pasystem-line-summary', $comment );
 	}
 
 	/**
-	 * Détecte les résumés auto-générés par MediaWiki.
+	 * Detects summaries auto-generated by MediaWiki.
 	 *
-	 * Pour les créations : MW préfixe avec « Page créée avec » (fr) ou
-	 * « Created page with » (en), suivi d'un extrait du contenu. C'est rarement
-	 * utile à afficher dans une annonce Discord (verbeux, peu lisible).
+	 * Instead of hardcoding language-specific strings, we derive the
+	 * detection prefixes from the core autosumm-* messages in the wiki's
+	 * content language, so this works on any wiki regardless of language.
 	 *
-	 * On gère aussi le préfixe de section « → » et la flèche gauche « ← ».
+	 * Also handles the optional section arrows ("→", "←") MW may prepend.
 	 */
-	private function isAutoGeneratedSummary( string $comment, string $actionKind ): bool {
-		if ( $actionKind !== 'new' ) {
-			return false;
-		}
-		// Retirer les caractères de préfixe optionnels (flèches MW, espaces)
-		$normalized = ltrim( $comment, "←→\xE2\x86\x90\xE2\x86\x92 \t" );
-		$patterns = [
-			'Page créée avec',     // français
-			'Created page with',   // anglais
-			'Page blanchie',       // page blanchie
-			'Blanked the page',
-		];
-		foreach ( $patterns as $prefix ) {
+	private function isAutoGeneratedSummary( string $comment ): bool {
+		$normalized = ltrim( $comment, "←→ \t" );
+		foreach ( $this->getAutoSummaryPrefixes() as $prefix ) {
 			if ( str_starts_with( $normalized, $prefix ) ) {
 				return true;
 			}
@@ -384,25 +399,60 @@ class DiscordEmbedFormatter {
 		return false;
 	}
 
+	/**
+	 * Builds the list of auto-summary prefixes from the core autosumm-*
+	 * messages. Each message is rendered with a sentinel as parameter; the
+	 * text before the sentinel is the static prefix to match against.
+	 * Parameter-less messages (e.g. autosumm-blank) yield their full text.
+	 *
+	 * @return string[]
+	 */
+	private function getAutoSummaryPrefixes(): array {
+		if ( $this->autoSummaryPrefixes !== null ) {
+			return $this->autoSummaryPrefixes;
+		}
+
+		$sentinel = "\u{F0000}";
+		$prefixes = [];
+		foreach ( self::AUTOSUMM_MESSAGES as $key ) {
+			$text = $this->msg( $key, $sentinel, $sentinel );
+			$pos = strpos( $text, $sentinel );
+			$prefix = $pos === false ? $text : substr( $text, 0, $pos );
+			$prefix = trim( $prefix );
+			if ( $prefix !== '' ) {
+				$prefixes[] = $prefix;
+			}
+		}
+
+		$this->autoSummaryPrefixes = $prefixes;
+		return $prefixes;
+	}
+
 	private function makeMdLink( string $text, string $url ): string {
-		// Échapper les chars qui cassent le texte d'un lien markdown Discord
+		// Escape the chars that break the text part of a Discord markdown link
 		$safeText = str_replace( [ '[', ']', '(', ')' ], [ '⟦', '⟧', '⟨', '⟩' ], $text );
-		// Encadrer l'URL avec < > : nécessaire pour les URLs contenant des
-		// parenthèses (ex. « Vulpes Inculta (Fallout: New Vegas) »), sinon le
-		// markdown Discord casse le lien au premier ')'. Bonus : désactive
-		// aussi l'aperçu auto pour ce lien spécifique.
+		// Wrap the URL in < >: required for URLs containing parentheses
+		// (e.g. "Vulpes Inculta (Fallout: New Vegas)"), otherwise Discord
+		// markdown breaks the link at the first ')'. Bonus: also disables
+		// the auto-preview for this specific link.
 		return '[' . $safeText . '](<' . $url . '>)';
 	}
 
 	private function escapeMarkdown( string $text ): string {
-		// Échapper * _ ` ~ et > (citation) sans casser la lisibilité
+		// Escape * _ ` ~ and > (quote) without hurting readability
 		return preg_replace( '/([\\\\*_`~>|])/', '\\\\$1', $text );
 	}
 
+	/**
+	 * Final cleanup of a formatted line: collapses double spaces left by
+	 * empty optional parameters (icon, delta, summary…) and trims the ends.
+	 */
+	private function cleanupLine( string $line ): string {
+		return trim( preg_replace( '/\h{2,}/u', ' ', $line ) );
+	}
+
 	private function getUserUrl( string $userText ): string {
-		// NS_USER = 2, hardcoded pour éviter de dépendre de defines.php
-		// dans un contexte de namespace
-		$title = $this->titleFactory->makeTitle( 2, $userText );
+		$title = $this->titleFactory->makeTitle( NS_USER, $userText );
 		return $title->getFullURL();
 	}
 
@@ -415,9 +465,9 @@ class DiscordEmbedFormatter {
 	}
 
 	/**
-	 * URL d'un diff entre deux révisions de la page courante.
-	 * Utilise Title::getFullURL avec query pour générer l'URL selon
-	 * la config du wiki ($wgArticlePath etc.).
+	 * URL of a diff between two revisions of the current page.
+	 * Uses Title::getFullURL with a query so the URL follows the wiki's
+	 * configuration ($wgArticlePath etc.).
 	 */
 	private function getDiffUrl( array $params ): string {
 		$title = $this->titleFactory->makeTitle(
@@ -431,13 +481,13 @@ class DiscordEmbedFormatter {
 	}
 
 	/**
-	 * URL d'une page nommée par sa version texte (typiquement la cible
-	 * d'un renommage, qu'on récupère via rc_params).
+	 * URL of a page named by its text form (typically the target of a page
+	 * move, recovered from rc_params).
 	 */
 	private function getPageUrlFromText( string $prefixedText ): string {
 		$title = $this->titleFactory->newFromText( $prefixedText );
 		if ( $title === null ) {
-			// Fallback : URL approximative si le titre est invalide
+			// Fallback: approximate URL if the title is invalid
 			return $this->getWikiBaseUrl()
 				. '/index.php?title=' . rawurlencode( str_replace( ' ', '_', $prefixedText ) );
 		}
@@ -445,13 +495,13 @@ class DiscordEmbedFormatter {
 	}
 
 	/* ============================================================
-	 * Format EMBED — version riche, conservée pour compatibilité
+	 * EMBED format — rich version
 	 * ============================================================ */
 
 	private function buildEmbedPayload( array $params ): array {
 		$embed = $this->buildEmbed( $params );
 		return [
-			'username'         => $this->config->get( 'PASystemBotName' ),
+			'username'         => $this->getBotName(),
 			'embeds'           => [ $embed ],
 			'allowed_mentions' => [ 'parse' => [] ],
 		];
@@ -459,85 +509,92 @@ class DiscordEmbedFormatter {
 
 	private function buildEmbed( array $params ): array {
 		$rcType = (int)$params['rc_type'];
-		$logType = (string)$params['rc_log_type'];
-		$logAction = (string)$params['rc_log_action'];
-
-		$actionKind = $this->resolveActionKind( $rcType, $logType, $logAction );
-		$color = $this->resolveColor( $actionKind );
-		$title = $this->buildTitle( $params, $actionKind );
-		$url = $this->buildPrimaryUrl( $params, $rcType );
+		$actionKind = $this->getActionKindFromParams( $params );
 
 		$embed = [
-			'title'     => $title,
-			'color'     => $color,
-			'timestamp' => $this->formatTimestamp( (string)$params['rc_timestamp'] ),
-			'author'    => $this->buildAuthor( $params ),
+			'title'  => $this->buildTitle( $params, $actionKind ),
+			'color'  => $this->resolveColor( $actionKind ),
+			'author' => $this->buildAuthor( $params ),
 		];
 
+		if ( $this->display( 'timestamp' ) ) {
+			$embed['timestamp'] = $this->formatTimestamp( (string)$params['rc_timestamp'] );
+		}
+
+		$url = $this->buildPrimaryUrl( $params, $rcType );
 		if ( $url ) {
 			$embed['url'] = $url;
 		}
 
-		// Champs : résumé, taille, flags
+		// Fields: size, flags, summary, links
 		$fields = [];
 
-		// Pour les éditions : delta d'octets
 		if ( $rcType === RC_EDIT || $rcType === RC_NEW ) {
-			$delta = (int)$params['rc_new_len'] - (int)$params['rc_old_len'];
-			$fields[] = [
-				'name'   => '📐 Taille',
-				'value'  => $this->formatDelta( $delta ),
-				'inline' => true,
-			];
-
-			$flags = $this->buildFlags( $params );
-			if ( $flags !== '' ) {
+			if ( $this->display( 'delta' ) ) {
+				$delta = (int)$params['rc_new_len'] - (int)$params['rc_old_len'];
 				$fields[] = [
-					'name'   => '🏷️ Drapeaux',
-					'value'  => $flags,
+					'name'   => $this->msg( 'pasystem-embed-size' ),
+					'value'  => $this->formatDelta( $delta ),
 					'inline' => true,
+				];
+			}
+
+			if ( $this->display( 'flags' ) ) {
+				$flags = $this->buildFlags( $params );
+				if ( $flags !== '' ) {
+					$fields[] = [
+						'name'   => $this->msg( 'pasystem-embed-flags' ),
+						'value'  => $flags,
+						'inline' => true,
+					];
+				}
+			}
+		}
+
+		if ( $this->display( 'summary' ) ) {
+			$comment = trim( (string)$params['rc_comment'] );
+			if ( $comment !== ''
+				&& !( (bool)$this->config->get( 'PASystemStripAutoSummaries' )
+					&& $this->isAutoGeneratedSummary( $comment ) )
+			) {
+				$fields[] = [
+					'name'   => $this->msg( 'pasystem-embed-summary' ),
+					'value'  => $this->truncate( $comment, 1024 ),
+					'inline' => false,
 				];
 			}
 		}
 
-		// Résumé d'édition / commentaire de log
-		$comment = trim( (string)$params['rc_comment'] );
-		if ( $comment !== '' ) {
-			$fields[] = [
-				'name'   => '💬 Résumé',
-				'value'  => $this->truncate( $comment, 1024 ),
-				'inline' => false,
-			];
-		}
-
-		// Liens utiles
-		$links = $this->buildLinks( $params, $rcType );
-		if ( $links !== '' ) {
-			$fields[] = [
-				'name'   => '🔗 Liens',
-				'value'  => $links,
-				'inline' => false,
-			];
+		if ( $this->display( 'links' ) ) {
+			$links = $this->buildLinks( $params, $rcType );
+			if ( $links !== '' ) {
+				$fields[] = [
+					'name'   => $this->msg( 'pasystem-embed-links' ),
+					'value'  => $links,
+					'inline' => false,
+				];
+			}
 		}
 
 		if ( $fields ) {
 			$embed['fields'] = $fields;
 		}
 
-		$embed['footer'] = [
-			'text' => $this->config->get( 'PASystemBotName' ) . ' • Système d\'annonces publiques',
-		];
+		if ( $this->display( 'footer' ) ) {
+			$embed['footer'] = [
+				'text' => $this->msg( 'pasystem-embed-footer', $this->getBotName() ),
+			];
+		}
 
 		return $embed;
 	}
 
 	/**
-	 * Détermine la « catégorie » d'action — utilisée pour la couleur et le
-	 * verbe d'action.
+	 * Determines the action "kind" — used for the color, the icon and the
+	 * action verb.
 	 */
 	private function resolveActionKind( int $rcType, string $logType, string $logAction ): string {
-		// RC_LOG = 3
-		if ( $rcType === 3 ) {
+		if ( $rcType === RC_LOG ) {
 			switch ( $logType ) {
 				case 'delete':
 					return $logAction === 'restore' ? 'restore' : 'delete';
@@ -558,18 +615,17 @@ class DiscordEmbedFormatter {
 			}
 		}
 
-		// RC_NEW = 1
-		if ( $rcType === 1 ) {
+		if ( $rcType === RC_NEW ) {
 			return 'new';
 		}
 
-		// RC_EDIT = 0 (default)
 		return 'edit';
 	}
 
 	private function resolveColor( string $kind ): int {
-		$colors = $this->config->get( 'PASystemEmbedColors' );
-		// Map quelques alias
+		$configured = $this->config->get( 'PASystemEmbedColors' );
+		$colors = is_array( $configured ) ? $configured : [];
+		// Map a few aliases
 		$key = match ( $kind ) {
 			'restore', 'unprotect', 'unblock' => 'edit',
 			'rights'                          => 'log',
@@ -580,53 +636,34 @@ class DiscordEmbedFormatter {
 
 	private function buildTitle( array $params, string $actionKind ): string {
 		$userText = (string)$params['rc_user_text'];
-		$pageTitle = $this->getPrefixedTitle( $params );
+		$icon = $this->getActionIcon( $actionKind );
 
-		$verb = $this->getActionVerb( $actionKind );
-
-		// Cas spécial : création de compte → le « pageTitle » est en fait le nom de l'utilisateur
+		// Special case: account creation → the "page title" is actually the user name
 		if ( $actionKind === 'newuser' ) {
-			return sprintf( '👤 %s %s %s', $userText, $verb, $userText );
+			return $this->cleanupLine(
+				$this->msg( 'pasystem-embed-title-newuser', $icon, $userText )
+			);
 		}
 
-		$icon = $this->getActionIcon( $actionKind );
-		return sprintf( '%s %s %s « %s »', $icon, $userText, $verb, $pageTitle );
+		return $this->cleanupLine( $this->msg( 'pasystem-embed-title',
+			$icon,
+			$userText,
+			$this->msg( 'pasystem-action-' . $actionKind ),
+			$this->getPrefixedTitle( $params )
+		) );
 	}
 
-	private function getActionVerb( string $kind ): string {
-		return match ( $kind ) {
-			'edit'      => 'a modifié',
-			'new'       => 'a créé',
-			'upload'    => 'a téléversé',
-			'delete'    => 'a supprimé',
-			'restore'   => 'a restauré',
-			'move'      => 'a déplacé',
-			'protect'   => 'a protégé',
-			'unprotect' => 'a déprotégé',
-			'block'     => 'a bloqué',
-			'unblock'   => 'a débloqué',
-			'newuser'   => 'a créé le compte',
-			'rights'    => 'a modifié les droits de',
-			default     => 'a effectué une action sur',
-		};
-	}
-
+	/**
+	 * Icon for an action kind: $wgPASystemActionIcons merged over the
+	 * defaults. Empty string when the 'icons' display toggle is off.
+	 */
 	private function getActionIcon( string $kind ): string {
-		return match ( $kind ) {
-			'edit'      => '📝',
-			'new'       => '🆕',
-			'upload'    => '📤',
-			'delete'    => '🗑️',
-			'restore'   => '♻️',
-			'move'      => '📨',
-			'protect'   => '🔒',
-			'unprotect' => '🔓',
-			'block'     => '🚫',
-			'unblock'   => '✅',
-			'newuser'   => '👤',
-			'rights'    => '🛡️',
-			default     => '📋',
-		};
+		if ( !$this->display( 'icons' ) ) {
+			return '';
+		}
+		$configured = $this->config->get( 'PASystemActionIcons' );
+		$icons = ( is_array( $configured ) ? $configured : [] ) + self::DEFAULT_ICONS;
+		return (string)( $icons[ $kind ] ?? $icons['log'] ?? '' );
 	}
 
 	private function buildAuthor( array $params ): array {
@@ -638,11 +675,11 @@ class DiscordEmbedFormatter {
 	}
 
 	private function buildPrimaryUrl( array $params, int $rcType ): ?string {
-		// Pour les édits avec parent : pointer vers le diff
-		if ( $rcType === 0 && (int)$params['rc_this_oldid'] > 0 && (int)$params['rc_last_oldid'] > 0 ) {
+		// For edits with a parent revision: point to the diff
+		if ( $rcType === RC_EDIT && (int)$params['rc_this_oldid'] > 0 && (int)$params['rc_last_oldid'] > 0 ) {
 			return $this->getDiffUrl( $params );
 		}
-		// Sinon : pointer vers la page
+		// Otherwise: point to the page
 		return $this->getPageUrl( $params );
 	}
 
@@ -655,25 +692,32 @@ class DiscordEmbedFormatter {
 
 		$links = [];
 
-		// Diff (uniquement pour les édits avec parent)
-		if ( $rcType === 0 && (int)$params['rc_this_oldid'] > 0 && (int)$params['rc_last_oldid'] > 0 ) {
-			$links[] = '[diff](' . $this->getDiffUrl( $params ) . ')';
+		// Diff (only for edits with a parent revision)
+		if ( $this->display( 'diffLink' )
+			&& $rcType === RC_EDIT
+			&& (int)$params['rc_this_oldid'] > 0
+			&& (int)$params['rc_last_oldid'] > 0
+		) {
+			$links[] = $this->makeMdLink( $this->msg( 'pasystem-link-diff' ), $this->getDiffUrl( $params ) );
 		}
 
-		// Page (sauf pour les créations de compte où le titre = le user)
-		if ( $rcType !== 3 || $this->getActionKindFromParams( $params ) !== 'newuser' ) {
-			$links[] = '[page](' . $pageTitle->getFullURL() . ')';
+		// Page (except for account creations where the title = the user)
+		if ( $rcType !== RC_LOG || $this->getActionKindFromParams( $params ) !== 'newuser' ) {
+			$links[] = $this->makeMdLink( $this->msg( 'pasystem-link-page' ), $pageTitle->getFullURL() );
 		}
 
-		// Historique (pour les pages d'articles uniquement)
-		if ( $rcType === 0 || $rcType === 1 ) {
-			$links[] = '[historique](' . $pageTitle->getFullURL( [ 'action' => 'history' ] ) . ')';
+		// History (for content pages only)
+		if ( $rcType === RC_EDIT || $rcType === RC_NEW ) {
+			$links[] = $this->makeMdLink(
+				$this->msg( 'pasystem-link-history' ),
+				$pageTitle->getFullURL( [ 'action' => 'history' ] )
+			);
 		}
 
-		// Contributions de l'utilisateur (toujours pertinent)
-		// On utilise SpecialPage::getTitleFor pour avoir la traduction locale
-		$contribsTitle = \SpecialPage::getTitleFor( 'Contributions', $userText );
-		$links[] = '[contribs](' . $contribsTitle->getFullURL() . ')';
+		// User contributions (always relevant).
+		// SpecialPage::getTitleFor gives the localized special page name.
+		$contribsTitle = SpecialPage::getTitleFor( 'Contributions', $userText );
+		$links[] = $this->makeMdLink( $this->msg( 'pasystem-link-contribs' ), $contribsTitle->getFullURL() );
 
 		return implode( ' • ', $links );
 	}
@@ -681,29 +725,30 @@ class DiscordEmbedFormatter {
 	private function buildFlags( array $params ): string {
 		$flags = [];
 		if ( (int)$params['rc_minor'] === 1 ) {
-			$flags[] = '`m`';
+			$flags[] = '`' . $this->msg( 'pasystem-flag-minor' ) . '`';
 		}
 		if ( (int)$params['rc_bot'] === 1 ) {
-			$flags[] = '`b`';
+			$flags[] = '`' . $this->msg( 'pasystem-flag-bot' ) . '`';
 		}
-		// La nouveauté est déjà visible dans le verbe « a créé », on n'ajoute pas un flag N redondant.
+		// Newness is already visible in the "created" verb, no redundant N flag.
 		return implode( ' ', $flags );
 	}
 
 	private function formatDelta( int $delta ): string {
+		$formatted = $this->contentLang->formatNum( abs( $delta ) );
 		if ( $delta > 0 ) {
-			return sprintf( '🟢 **+%s** octets', number_format( $delta, 0, ',', "\u{00A0}" ) );
+			return $this->msg( 'pasystem-bytes-added', $formatted );
 		}
 		if ( $delta < 0 ) {
-			return sprintf( '🔴 **−%s** octets', number_format( abs( $delta ), 0, ',', "\u{00A0}" ) );
+			return $this->msg( 'pasystem-bytes-removed', $formatted );
 		}
-		return '⚪ 0 octet';
+		return $this->msg( 'pasystem-bytes-neutral', $formatted );
 	}
 
 	private function getPrefixedTitle( array $params ): string {
 		$ns = (int)$params['rc_namespace'];
 		$title = (string)$params['rc_title'];
-		// Cas particulier des logs : le namespace peut être -1, on garde le titre tel quel
+		// Special case for logs: the namespace may be -1, keep the title as-is
 		if ( $ns === -1 ) {
 			return $title;
 		}
@@ -730,7 +775,7 @@ class DiscordEmbedFormatter {
 	}
 
 	private function formatTimestamp( string $mwTimestamp ): string {
-		// Format MW : YYYYMMDDHHMMSS → ISO 8601 pour Discord
+		// MW format: YYYYMMDDHHMMSS → ISO 8601 for Discord
 		if ( strlen( $mwTimestamp ) === 14 && ctype_digit( $mwTimestamp ) ) {
 			$dt = \DateTimeImmutable::createFromFormat(
 				'YmdHis',
@@ -756,7 +801,7 @@ class DiscordEmbedFormatter {
 		if ( $configured ) {
 			return rtrim( $configured, '/' );
 		}
-		// Fallback sur $wgServer + le path standard
+		// Fall back to $wgServer + the standard path
 		$server = $this->config->get( 'Server' );
 		$scriptPath = $this->config->get( 'ScriptPath' );
 		return rtrim( $server . $scriptPath, '/' );

@@ -4,33 +4,29 @@ declare( strict_types = 1 );
 
 namespace MediaWiki\Extension\PublicAnnouncementSystem\Special;
 
-use Config;
-use HTMLForm;
+use MediaWiki\Config\Config;
 use MediaWiki\Extension\PublicAnnouncementSystem\Notifier\DiscordNotifier;
-use MediaWiki\Http\HttpRequestFactory;
-use SpecialPage;
+use MediaWiki\HTMLForm\HTMLForm;
+use MediaWiki\SpecialPage\SpecialPage;
 
 /**
- * Special:PASystemTest — envoie un message de test vers le webhook.
+ * Special:PASystemTest — sends a test message to the webhook.
  *
- * Page d'admin réservée au droit `pasystem-admin` (sysop par défaut).
- * Pratique pour valider l'install et le rendu Discord sans attendre une
- * vraie modification du wiki.
+ * Admin page restricted to the `pasystem-admin` right (sysop by default).
+ * Convenient to validate the install and the Discord rendering without
+ * waiting for a real wiki change.
  */
 class SpecialPASystemTest extends SpecialPage {
 
 	private Config $config;
-	private HttpRequestFactory $httpRequestFactory;
 	private DiscordNotifier $notifier;
 
 	public function __construct(
 		Config $config,
-		HttpRequestFactory $httpRequestFactory,
 		DiscordNotifier $notifier
 	) {
 		parent::__construct( 'PASystemTest', 'pasystem-admin' );
 		$this->config = $config;
-		$this->httpRequestFactory = $httpRequestFactory;
 		$this->notifier = $notifier;
 	}
 
@@ -54,14 +50,24 @@ class SpecialPASystemTest extends SpecialPage {
 	}
 
 	public function onSubmit( array $data ) {
+		$botName = (string)$this->config->get( 'PASystemBotName' );
+		if ( $botName === '' ) {
+			$botName = (string)$this->config->get( 'Sitename' );
+		}
+
+		// Content language: the Discord channel audience is the wiki
+		// community, not the individual admin running the test.
+		$content = $this->msg(
+			'pasystem-test-message',
+			$this->getUser()->getName(),
+			$this->config->get( 'Sitename' )
+		)->inContentLanguage()->text();
+
 		$payload = [
-			'username'         => $this->config->get( 'PASystemBotName' ),
-			'content'          => sprintf(
-				'🧪 **%s** a déclenché un test du Système d\'annonces publiques sur %s',
-				$this->getUser()->getName(),
-				$this->config->get( 'Sitename' )
-			),
-			'flags'            => 4, // SUPPRESS_EMBEDS
+			'username'         => $botName,
+			'content'          => $content,
+			// 4 = SUPPRESS_EMBEDS
+			'flags'            => 4,
 			'allowed_mentions' => [ 'parse' => [] ],
 		];
 

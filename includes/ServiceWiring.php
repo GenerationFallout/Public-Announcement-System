@@ -1,9 +1,9 @@
 <?php
 /**
- * ServiceWiring pour PASystem.
+ * Service wiring for PublicAnnouncementSystem.
  *
- * Définit les services injectables nommés "PASystem.X" utilisés dans
- * extension.json via les attributs HookHandlers, JobClasses, SpecialPages.
+ * Defines the injectable "PASystem.X" services referenced in extension.json
+ * through the HookHandlers, JobClasses and SpecialPages attributes.
  *
  * @file
  */
@@ -26,10 +26,12 @@ return [
 	},
 
 	'PASystem.DiscordEmbedFormatter' => static function ( MediaWikiServices $services ): DiscordEmbedFormatter {
+		$contentLang = $services->getContentLanguage();
 		return new DiscordEmbedFormatter(
 			$services->getMainConfig(),
 			$services->getTitleFactory(),
-			$services->getContentLanguage(),
+			$contentLang,
+			$services->getMessageFormatterFactory()->getTextFormatter( $contentLang->getCode() ),
 			LoggerFactory::getInstance( 'PublicAnnouncementSystem' )
 		);
 	},
