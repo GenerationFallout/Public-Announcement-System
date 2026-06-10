@@ -24,6 +24,21 @@ jobs:
       - name: Lint & phpcs & minus-x
         run: composer test
 
+      - name: i18n consistency (en/fr/qqq keys must match)
+        run: |
+          python3 - <<'EOF'
+          import json, sys
+          files = {f: set(json.load(open(f'i18n/{f}.json'))) - {'@metadata'} for f in ('en', 'fr', 'qqq')}
+          base = files['en']
+          ok = True
+          for name, keys in files.items():
+              for label, diff in (('missing', base - keys), ('extra', keys - base)):
+                  if diff:
+                      print(f'i18n/{name}.json {label} keys: {sorted(diff)}')
+                      ok = False
+          sys.exit(0 if ok else 1)
+          EOF
+
   phpunit:
     name: PHPUnit (MediaWiki ${{ matrix.mw }})
     runs-on: ubuntu-latest
