@@ -119,6 +119,21 @@ class DiscordEmbedFormatter {
 	 * @return array Payload ready for json_encode
 	 */
 	public function build( array $params ): array {
+		// Flood notice: single informational message replacing the
+		// announcement that crossed the per-minute cap (see FloodGuard).
+		if ( !empty( $params['_flood_notice'] ) ) {
+			$payload = [
+				'username'         => $this->getBotName(),
+				'content'          => $this->msg(
+					'pasystem-flood-notice',
+					(string)$this->config->get( 'Sitename' )
+				),
+				'allowed_mentions' => [ 'parse' => [] ],
+			];
+			$payload['flags'] = self::FLAG_SUPPRESS_EMBEDS;
+			return $payload;
+		}
+
 		$format = (string)$this->config->get( 'PASystemFormat' );
 
 		if ( $format === 'embed' ) {
@@ -189,6 +204,26 @@ class DiscordEmbedFormatter {
 		];
 	}
 
+	/**
+	 * Public action kind resolver, used by callers to route the payload
+	 * to the right webhook ($wgPASystemWebhookRoutes). Defensive about
+	 * missing keys so it can be called with partial params.
+	 *
+	 * @param array $params RecentChange data (see RecentChangeHooks)
+	 * @return string Action kind ('edit', 'delete', …), or 'flood' for
+	 *   flood notices
+	 */
+	public function getActionKind( array $params ): string {
+		if ( !empty( $params['_flood_notice'] ) ) {
+			return 'flood';
+		}
+		return $this->resolveActionKind(
+			(int)( $params['rc_type'] ?? RC_EDIT ),
+			(string)( $params['rc_log_type'] ?? '' ),
+			(string)( $params['rc_log_action'] ?? '' )
+		);
+	}
+
 	private function buildLineContent( array $params ): string {
 		$kind = $this->getActionKindFromParams( $params );
 		$icon = $this->getActionIcon( $kind );
@@ -250,11 +285,34 @@ class DiscordEmbedFormatter {
 				break;
 
 			default:
-				$line = $this->msg( 'pasystem-line-log', $icon, $userLink, $summary );
+				$line = $this->lineForGenericLog( $params, $icon, $userLink, $pageLink, $summary );
 				break;
 		}
 
 		return $this->cleanupLine( $line );
+	}
+
+	/**
+	 * Generic line for log actions without a dedicated template (patrol,
+	 * import, merge, actions added by other extensions…). Shows the log
+	 * type and, when the entry targets a page, a link to it.
+	 */
+	private function lineForGenericLog(
+		array $params,
+		string $icon,
+		string $userLink,
+		string $pageLink,
+		string $summary
+	): string {
+		$logType = (string)$params['rc_log_type'];
+		$logAction = (string)$params['rc_log_action'];
+		$name = trim( $logType . ( $logAction !== '' ? '/' . $logAction : '' ), '/ ' );
+		$label = '`' . ( $name !== '' ? $name : 'log' ) . '`';
+
+		if ( (string)$params['rc_title'] !== '' ) {
+			return $this->msg( 'pasystem-line-log', $icon, $userLink, $label, $pageLink, $summary );
+		}
+		return $this->msg( 'pasystem-line-log-nopage', $icon, $userLink, $label, $summary );
 	}
 
 	/**

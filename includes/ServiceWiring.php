@@ -11,6 +11,7 @@
 declare( strict_types = 1 );
 
 use MediaWiki\Extension\PublicAnnouncementSystem\Filter\ChangeFilter;
+use MediaWiki\Extension\PublicAnnouncementSystem\Filter\FloodGuard;
 use MediaWiki\Extension\PublicAnnouncementSystem\Formatter\DiscordEmbedFormatter;
 use MediaWiki\Extension\PublicAnnouncementSystem\Notifier\DiscordNotifier;
 use MediaWiki\Logger\LoggerFactory;
@@ -21,6 +22,14 @@ return [
 	'PASystem.ChangeFilter' => static function ( MediaWikiServices $services ): ChangeFilter {
 		return new ChangeFilter(
 			$services->getMainConfig(),
+			LoggerFactory::getInstance( 'PublicAnnouncementSystem' )
+		);
+	},
+
+	'PASystem.FloodGuard' => static function ( MediaWikiServices $services ): FloodGuard {
+		return new FloodGuard(
+			$services->getMainConfig(),
+			$services->getMainObjectStash(),
 			LoggerFactory::getInstance( 'PublicAnnouncementSystem' )
 		);
 	},

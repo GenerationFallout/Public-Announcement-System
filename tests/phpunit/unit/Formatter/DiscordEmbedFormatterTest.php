@@ -263,6 +263,52 @@ class DiscordEmbedFormatterTest extends MediaWikiUnitTestCase {
 		$this->assertStringContainsString( 'joined the wiki — welcome!', $payload['content'] );
 	}
 
+	public function testGenericLogLineShowsTypeAndPage(): void {
+		$payload = $this->makeFormatter()->build( $this->makeEditParams( [
+			'rc_type'       => RC_LOG,
+			'rc_log_type'   => 'import',
+			'rc_log_action' => 'upload',
+			'rc_comment'    => '',
+		] ) );
+
+		$content = $payload['content'];
+		$this->assertStringContainsString( '`import/upload`', $content );
+		$this->assertStringContainsString( '[Vault City](<', $content );
+	}
+
+	public function testGenericLogLineWithoutPage(): void {
+		$payload = $this->makeFormatter()->build( $this->makeEditParams( [
+			'rc_type'       => RC_LOG,
+			'rc_log_type'   => 'patrol',
+			'rc_log_action' => '',
+			'rc_title'      => '',
+			'rc_comment'    => '',
+		] ) );
+
+		$this->assertStringContainsString( '`patrol`', $payload['content'] );
+		$this->assertStringNotContainsString( ' on ', $payload['content'] );
+	}
+
+	public function testFloodNoticePayload(): void {
+		$payload = $this->makeFormatter()->build( [ '_flood_notice' => 1, 'rc_id' => 7 ] );
+
+		$this->assertSame( 'TestBot', $payload['username'] );
+		$this->assertSame( 4, $payload['flags'] );
+		$this->assertSame( [ 'parse' => [] ], $payload['allowed_mentions'] );
+		$this->assertStringContainsString( 'TestWiki', $payload['content'] );
+		$this->assertStringContainsString( '🌊', $payload['content'] );
+	}
+
+	public function testGetActionKind(): void {
+		$formatter = $this->makeFormatter();
+
+		$this->assertSame( 'edit', $formatter->getActionKind( $this->makeEditParams() ) );
+		$this->assertSame( 'delete', $formatter->getActionKind( [
+			'rc_type' => RC_LOG, 'rc_log_type' => 'delete', 'rc_log_action' => 'delete',
+		] ) );
+		$this->assertSame( 'flood', $formatter->getActionKind( [ '_flood_notice' => 1 ] ) );
+	}
+
 	public function testLineMoveWithTarget(): void {
 		$payload = $this->makeFormatter()->build( $this->makeEditParams( [
 			'rc_type'       => RC_LOG,

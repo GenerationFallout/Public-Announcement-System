@@ -36,7 +36,8 @@
 			"services": [
 				"MainConfig",
 				"JobQueueGroup",
-				"PASystem.ChangeFilter"
+				"PASystem.ChangeFilter",
+				"PASystem.FloodGuard"
 			]
 		}
 	},
@@ -73,6 +74,10 @@
 			"value": "",
 			"description": "Discord webhook URL (must be HTTPS). If empty, the extension is disabled."
 		},
+		"PASystemWebhookRoutes": {
+			"value": {},
+			"description": "Optional map of action kinds to dedicated webhook URLs (HTTPS). Kinds: edit, new, upload, delete, restore, move, protect, unprotect, block, unblock, newuser, rights, log, flood. Kinds without a route fall back to PASystemWebhookUrl. Example: {\"block\": \"https://discord.com/api/webhooks/…\", \"delete\": \"https://discord.com/api/webhooks/…\"}."
+		},
 		"PASystemBotName": {
 			"value": "",
 			"description": "Display name of the bot in Discord. If empty, the wiki's $wgSitename is used."
@@ -84,6 +89,10 @@
 		"PASystemWikiBaseUrl": {
 			"value": "",
 			"description": "Base URL of the wiki used to build links (e.g. https://example.org). If empty, derived from $wgServer + $wgScriptPath."
+		},
+		"PASystemIncludedNamespaces": {
+			"value": [],
+			"description": "Namespace allowlist: when non-empty, only changes in these namespace numbers are announced (e.g. [0] for the main namespace only). Empty = all namespaces."
 		},
 		"PASystemExcludedNamespaces": {
 			"value": [],
@@ -104,6 +113,18 @@
 		"PASystemNotifyMinor": {
 			"value": true,
 			"description": "Notify minor edits."
+		},
+		"PASystemNotifyCategorization": {
+			"value": false,
+			"description": "Notify category membership changes (RC_CATEGORIZE rows). Off by default: a single edit can produce several of these technical entries."
+		},
+		"PASystemNotifyExternal": {
+			"value": false,
+			"description": "Notify external changes (RC_EXTERNAL rows, e.g. Wikidata updates)."
+		},
+		"PASystemMaxPerMinute": {
+			"value": 0,
+			"description": "Maximum number of announcements per minute (fixed window, shared across requests via the main object stash). When the cap is crossed, a single flood notice is sent and further announcements are dropped until the window resets. 0 = unlimited."
 		},
 		"PASystemMinDiffSize": {
 			"value": 0,

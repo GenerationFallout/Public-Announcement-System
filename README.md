@@ -45,9 +45,24 @@ All settings go in `LocalSettings.php`.
 | Setting | Default | Description |
 |---|---|---|
 | `$wgPASystemWebhookUrl` | `''` | Discord webhook URL (must be HTTPS). Empty = extension disabled. |
+| `$wgPASystemWebhookRoutes` | `{}` | Optional per-action webhook routing (see below). |
 | `$wgPASystemBotName` | `''` | Bot display name in Discord. Empty = uses `$wgSitename`. |
 | `$wgPASystemBotAvatarUrl` | `''` | Avatar URL for the bot (optional). |
 | `$wgPASystemWikiBaseUrl` | `''` | Base URL used for links. Empty = derived from `$wgServer` + `$wgScriptPath`. |
+
+#### Per-action routing (`$wgPASystemWebhookRoutes`)
+
+Each action kind can be sent to its own webhook (i.e. its own channel). Kinds without a route fall back to `$wgPASystemWebhookUrl`. Available kinds: `edit`, `new`, `upload`, `delete`, `restore`, `move`, `protect`, `unprotect`, `block`, `unblock`, `newuser`, `rights`, `log`, plus `flood` for flood notices.
+
+```php
+// Moderation actions go to the private #admin channel,
+// everything else to the public channel ($wgPASystemWebhookUrl):
+$wgPASystemWebhookRoutes = [
+    'delete' => 'https://discord.com/api/webhooks/…/admin…',
+    'block'  => 'https://discord.com/api/webhooks/…/admin…',
+    'rights' => 'https://discord.com/api/webhooks/…/admin…',
+];
+```
 
 ### Delivery
 
@@ -55,6 +70,7 @@ All settings go in `LocalSettings.php`.
 |---|---|---|
 | `$wgPASystemDeliveryMode` | `'immediate'` | `'immediate'`: POSTSEND deferred update, sub-second latency, no retry. `'job'`: JobQueue with automatic retries, latency depends on your JobRunner. |
 | `$wgPASystemFormat` | `'line'` | `'line'`: compact one-line message. `'embed'`: rich embed with fields. |
+| `$wgPASystemMaxPerMinute` | `0` | Announcement cap per minute (fixed window, shared across web requests and job runners). When crossed, a single flood notice (`pasystem-flood-notice` message) is sent and further announcements are dropped until the window resets. `0` = unlimited. |
 
 ### Filtering
 
@@ -62,6 +78,9 @@ All settings go in `LocalSettings.php`.
 |---|---|---|
 | `$wgPASystemNotifyBots` | `false` | Announce edits made by bot accounts. |
 | `$wgPASystemNotifyMinor` | `true` | Announce minor edits. |
+| `$wgPASystemNotifyCategorization` | `false` | Announce category membership changes (technical `RC_CATEGORIZE` entries; a single edit can produce several). |
+| `$wgPASystemNotifyExternal` | `false` | Announce external changes (`RC_EXTERNAL`, e.g. Wikidata updates). |
+| `$wgPASystemIncludedNamespaces` | `[]` | Namespace **allowlist**: when non-empty, only these namespaces are announced, e.g. `[ 0 ]` for the main namespace only. Empty = all. |
 | `$wgPASystemExcludedNamespaces` | `[]` | Namespace numbers to skip, e.g. `[ 2, 3 ]` for User and User_talk. |
 | `$wgPASystemExcludedUsers` | `[]` | User names whose actions are never announced. |
 | `$wgPASystemExcludedLogTypes` | `[]` | Log types to skip, e.g. `[ 'patrol', 'thanks' ]`. |
@@ -132,7 +151,9 @@ For instance, to change the edit announcement on a French wiki, edit the page `M
 | `pasystem-line-block` / `-unblock` | $1 icon, $2 user link, $3 blocked user, $4 summary |
 | `pasystem-line-newuser` | $1 icon, $2 user link |
 | `pasystem-line-rights` | $1 icon, $2 user link, $3 target user link, $4 summary |
-| `pasystem-line-log` | $1 icon, $2 user link, $3 summary |
+| `pasystem-line-log` | $1 icon, $2 user link, $3 log type label, $4 page link, $5 summary |
+| `pasystem-line-log-nopage` | $1 icon, $2 user link, $3 log type label, $4 summary |
+| `pasystem-flood-notice` | $1 wiki name — sent once when `$wgPASystemMaxPerMinute` is crossed |
 | `pasystem-line-summary` | wrapper around the summary ($1) |
 | `pasystem-line-diff` | wrapper around the diff link ($1) |
 
@@ -158,6 +179,19 @@ $1 $2 just improved $3$4$5$6 🎉
 | `pasystem-link-diff`, `-page`, `-history`, `-contribs` | link labels |
 
 Discord markdown (`**bold**`, `` `code` ``, emoji) is allowed in all of these messages.
+
+## Limitations & privacy
+
+- **Announcements are permanent on the Discord side.** If a revision is
+  later hidden on the wiki (RevisionDelete, oversight — e.g. because it
+  contained personal data), the Discord message that announced it **remains
+  visible** in the channel. Keep this in mind before pointing the webhook at
+  a public Discord server, and consider excluding sensitive namespaces.
+- The flood cap uses a fixed one-minute window, not a sliding one: a burst
+  spread across two windows can briefly exceed the configured rate.
+- In `immediate` delivery mode there is no retry on network errors (only
+  rate limits fall back to the job queue). Use the `job` mode if you need
+  guaranteed delivery.
 
 ## Special page
 

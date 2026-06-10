@@ -8,6 +8,7 @@ use JobQueueGroup;
 use MediaWiki\Config\Config;
 use MediaWiki\Deferred\DeferredUpdates;
 use MediaWiki\Extension\PublicAnnouncementSystem\Filter\ChangeFilter;
+use MediaWiki\Extension\PublicAnnouncementSystem\Filter\FloodGuard;
 use MediaWiki\Extension\PublicAnnouncementSystem\Job\DiscordNotifyJob;
 use MediaWiki\Extension\PublicAnnouncementSystem\Notifier\RateLimitException;
 use MediaWiki\Hook\RecentChange_saveHook;
@@ -41,16 +42,19 @@ class RecentChangeHooks implements RecentChange_saveHook {
 	private Config $config;
 	private JobQueueGroup $jobQueueGroup;
 	private ChangeFilter $filter;
+	private FloodGuard $floodGuard;
 	private LoggerInterface $logger;
 
 	public function __construct(
 		Config $config,
 		JobQueueGroup $jobQueueGroup,
-		ChangeFilter $filter
+		ChangeFilter $filter,
+		FloodGuard $floodGuard
 	) {
 		$this->config = $config;
 		$this->jobQueueGroup = $jobQueueGroup;
 		$this->filter = $filter;
+		$this->floodGuard = $floodGuard;
 		$this->logger = LoggerFactory::getInstance( 'PublicAnnouncementSystem' );
 	}
 
@@ -75,6 +79,32 @@ class RecentChangeHooks implements RecentChange_saveHook {
 					'rc_user'   => $recentChange->getAttribute( 'rc_user_text' ),
 					'reason'    => $decision->getReason(),
 				] );
+			}
+			return;
+		}
+
+		// Per-minute cap ($wgPASystemMaxPerMinute): when crossed, a single
+		// flood notice replaces the announcement; further changes in the
+		// window are dropped silently.
+		$verdict = $this->floodGuard->check();
+		if ( $verdict === FloodGuard::DROP ) {
+			if ( $this->config->get( 'PASystemDebug' ) ) {
+				$this->logger->debug( 'RC dropped by flood guard', [
+					'rc_id' => $recentChange->getAttribute( 'rc_id' ),
+				] );
+			}
+			return;
+		}
+		if ( $verdict === FloodGuard::NOTIFY ) {
+			$params = [
+				'_flood_notice' => 1,
+				'rc_id'         => (int)$recentChange->getAttribute( 'rc_id' ),
+			];
+			$title = $recentChange->getTitle();
+			if ( (string)$this->config->get( 'PASystemDeliveryMode' ) === 'immediate' ) {
+				$this->dispatchImmediate( $title, $params );
+			} else {
+				$this->dispatchJob( $title, $params );
 			}
 			return;
 		}
@@ -146,7 +176,7 @@ class RecentChangeHooks implements RecentChange_saveHook {
 					$formatter = $services->getService( 'PASystem.DiscordEmbedFormatter' );
 					$notifier  = $services->getService( 'PASystem.DiscordNotifier' );
 					$payload   = $formatter->build( $params );
-					$notifier->send( $payload );
+					$notifier->sendForKind( $formatter->getActionKind( $params ), $payload );
 				} catch ( RateLimitException $rl ) {
 					// Rate limit in immediate mode → degrade to a Job for retry
 					$logger->info( 'Immediate mode hit rate limit, falling back to job queue', [

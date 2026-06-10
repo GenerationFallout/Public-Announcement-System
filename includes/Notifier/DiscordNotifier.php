@@ -38,10 +38,33 @@ class DiscordNotifier {
 	}
 
 	/**
+	 * Sends the payload to the webhook configured for an action kind.
+	 *
+	 * $wgPASystemWebhookRoutes maps action kinds ('edit', 'delete',
+	 * 'block', …, plus 'flood' for flood notices) to dedicated webhook
+	 * URLs; kinds without a route fall back to $wgPASystemWebhookUrl.
+	 * This allows e.g. moderation actions to land in an admin channel
+	 * while regular edits go to a public one.
+	 *
+	 * @param string $kind Action kind (see DiscordEmbedFormatter::getActionKind)
+	 * @param array $payload Discord payload ready to be json_encoded.
+	 * @return void
+	 * @throws RuntimeException On permanent failure
+	 * @throws RateLimitException On 429 (retry possible)
+	 */
+	public function sendForKind( string $kind, array $payload ): void {
+		$routes = $this->config->get( 'PASystemWebhookRoutes' );
+		$url = is_array( $routes ) && !empty( $routes[ $kind ] )
+			? (string)$routes[ $kind ]
+			: null;
+		$this->send( $payload, $url );
+	}
+
+	/**
 	 * Sends the payload to the configured webhook.
 	 *
 	 * @param array $payload Discord payload ready to be json_encoded.
-	 * @param string|null $overrideUrl When provided, overrides the configured URL (for tests).
+	 * @param string|null $overrideUrl When provided, overrides the configured URL (route or test).
 	 * @return void
 	 * @throws RuntimeException On permanent failure
 	 * @throws RateLimitException On 429 (retry possible)

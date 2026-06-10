@@ -34,6 +34,21 @@ a single wiki and can be installed on any MediaWiki ≥ 1.43, in any language.
   parameters) are used, so word order can be adapted freely per language.
 - **`$wgPASystemDisplay`** — per-element display toggles: `icons`, `delta`,
   `summary`, `diffLink`, `links`, `flags`, `footer`, `timestamp`.
+- **`$wgPASystemWebhookRoutes`** — per-action webhook routing: each action
+  kind (`edit`, `delete`, `block`, …, plus `flood`) can be sent to its own
+  Discord channel; kinds without a route fall back to the main webhook.
+- **`$wgPASystemMaxPerMinute`** — announcement cap per minute (fixed
+  window shared through the main object stash). When crossed, a single
+  flood notice is sent and further announcements are dropped until the
+  window resets.
+- **`$wgPASystemIncludedNamespaces`** — namespace allowlist (only these
+  namespaces are announced when non-empty).
+- **`$wgPASystemNotifyCategorization` / `$wgPASystemNotifyExternal`** —
+  technical `RC_CATEGORIZE` / `RC_EXTERNAL` entries are no longer
+  announced as regular edits; both are off by default and can be enabled.
+- Generic log entries (patrol, import, actions from other extensions…)
+  now show the log type and a link to the target page instead of a bare
+  "performed an action".
 - **`$wgPASystemActionIcons`** — configurable emoji per action kind, merged
   over the defaults.
 - Special page alias file (`Special:PASystemTest` is now translatable;

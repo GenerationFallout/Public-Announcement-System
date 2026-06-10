@@ -16,12 +16,15 @@ use RecentChange;
 class ChangeFilterTest extends MediaWikiUnitTestCase {
 
 	private const DEFAULT_CONFIG = [
-		'PASystemNotifyBots'         => false,
-		'PASystemNotifyMinor'        => true,
-		'PASystemExcludedNamespaces' => [],
-		'PASystemExcludedUsers'      => [],
-		'PASystemExcludedLogTypes'   => [],
-		'PASystemMinDiffSize'        => 0,
+		'PASystemNotifyBots'            => false,
+		'PASystemNotifyMinor'           => true,
+		'PASystemNotifyCategorization'  => false,
+		'PASystemNotifyExternal'        => false,
+		'PASystemIncludedNamespaces'    => [],
+		'PASystemExcludedNamespaces'    => [],
+		'PASystemExcludedUsers'         => [],
+		'PASystemExcludedLogTypes'      => [],
+		'PASystemMinDiffSize'           => 0,
 	];
 
 	private function makeFilter( array $configOverrides = [] ): ChangeFilter {
@@ -75,6 +78,40 @@ class ChangeFilterTest extends MediaWikiUnitTestCase {
 		);
 		$this->assertFalse( $decision->isAllowed() );
 		$this->assertSame( 'minor edit', $decision->getReason() );
+	}
+
+	public function testRejectsCategorizationByDefault(): void {
+		$decision = $this->makeFilter()->shouldNotify(
+			$this->makeRecentChange( [ 'rc_type' => RC_CATEGORIZE ] )
+		);
+		$this->assertFalse( $decision->isAllowed() );
+		$this->assertSame( 'categorization change', $decision->getReason() );
+	}
+
+	public function testAcceptsCategorizationWhenEnabled(): void {
+		$decision = $this->makeFilter( [ 'PASystemNotifyCategorization' => true ] )->shouldNotify(
+			$this->makeRecentChange( [ 'rc_type' => RC_CATEGORIZE ] )
+		);
+		$this->assertTrue( $decision->isAllowed() );
+	}
+
+	public function testRejectsExternalChangeByDefault(): void {
+		$decision = $this->makeFilter()->shouldNotify(
+			$this->makeRecentChange( [ 'rc_type' => RC_EXTERNAL ] )
+		);
+		$this->assertFalse( $decision->isAllowed() );
+		$this->assertSame( 'external change', $decision->getReason() );
+	}
+
+	public function testNamespaceAllowlist(): void {
+		$filter = $this->makeFilter( [ 'PASystemIncludedNamespaces' => [ 0, 6 ] ] );
+
+		$this->assertTrue(
+			$filter->shouldNotify( $this->makeRecentChange( [ 'rc_namespace' => 0 ] ) )->isAllowed()
+		);
+		$decision = $filter->shouldNotify( $this->makeRecentChange( [ 'rc_namespace' => 3 ] ) );
+		$this->assertFalse( $decision->isAllowed() );
+		$this->assertSame( 'namespace not in allowlist (3)', $decision->getReason() );
 	}
 
 	public function testRejectsExcludedNamespace(): void {

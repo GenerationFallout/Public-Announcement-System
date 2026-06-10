@@ -62,7 +62,7 @@ class DiscordNotifyJob extends Job {
 
 		try {
 			$payload = $formatter->build( $this->params );
-			$notifier->send( $payload );
+			$notifier->sendForKind( $formatter->getActionKind( $this->params ), $payload );
 			return true;
 		} catch ( RateLimitException $rl ) {
 			$retryAfter = (int)ceil( $rl->getRetryAfter() );

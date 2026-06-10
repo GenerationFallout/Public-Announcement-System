@@ -45,9 +45,24 @@ Tous les réglages se font dans `LocalSettings.php`.
 | Réglage | Défaut | Description |
 |---|---|---|
 | `$wgPASystemWebhookUrl` | `''` | URL du webhook Discord (HTTPS obligatoire). Vide = extension désactivée. |
+| `$wgPASystemWebhookRoutes` | `{}` | Routage optionnel par type d'action (voir ci-dessous). |
 | `$wgPASystemBotName` | `''` | Nom affiché du bot dans Discord. Vide = utilise `$wgSitename`. |
 | `$wgPASystemBotAvatarUrl` | `''` | URL de l'avatar du bot (optionnel). |
 | `$wgPASystemWikiBaseUrl` | `''` | URL de base pour les liens. Vide = déduite de `$wgServer` + `$wgScriptPath`. |
+
+#### Routage par action (`$wgPASystemWebhookRoutes`)
+
+Chaque type d'action peut être envoyé vers son propre webhook (donc son propre canal). Les types sans route retombent sur `$wgPASystemWebhookUrl`. Types disponibles : `edit`, `new`, `upload`, `delete`, `restore`, `move`, `protect`, `unprotect`, `block`, `unblock`, `newuser`, `rights`, `log`, plus `flood` pour les avis de forte activité.
+
+```php
+// Les actions de modération partent vers le canal privé #admin,
+// tout le reste vers le canal public ($wgPASystemWebhookUrl) :
+$wgPASystemWebhookRoutes = [
+    'delete' => 'https://discord.com/api/webhooks/…/admin…',
+    'block'  => 'https://discord.com/api/webhooks/…/admin…',
+    'rights' => 'https://discord.com/api/webhooks/…/admin…',
+];
+```
 
 ### Envoi
 
@@ -55,6 +70,7 @@ Tous les réglages se font dans `LocalSettings.php`.
 |---|---|---|
 | `$wgPASystemDeliveryMode` | `'immediate'` | `'immediate'` : envoi différé POSTSEND, latence < 1 s, sans retry. `'job'` : JobQueue avec retries automatiques, latence dépendant de votre JobRunner. |
 | `$wgPASystemFormat` | `'line'` | `'line'` : message compact sur une ligne. `'embed'` : embed riche avec champs. |
+| `$wgPASystemMaxPerMinute` | `0` | Plafond d'annonces par minute (fenêtre fixe, partagée entre requêtes web et job runners). Quand il est franchi, un unique avis de forte activité (message `pasystem-flood-notice`) est envoyé puis les annonces sont ignorées jusqu'à la fin de la fenêtre. `0` = illimité. |
 
 ### Filtrage
 
@@ -62,6 +78,9 @@ Tous les réglages se font dans `LocalSettings.php`.
 |---|---|---|
 | `$wgPASystemNotifyBots` | `false` | Annoncer les modifications des comptes bots. |
 | `$wgPASystemNotifyMinor` | `true` | Annoncer les modifications mineures. |
+| `$wgPASystemNotifyCategorization` | `false` | Annoncer les changements d'appartenance aux catégories (entrées techniques `RC_CATEGORIZE` ; une seule édition peut en produire plusieurs). |
+| `$wgPASystemNotifyExternal` | `false` | Annoncer les changements externes (`RC_EXTERNAL`, ex. mises à jour Wikidata). |
+| `$wgPASystemIncludedNamespaces` | `[]` | **Liste blanche** de namespaces : si non vide, seuls ces namespaces sont annoncés, ex. `[ 0 ]` pour le main uniquement. Vide = tous. |
 | `$wgPASystemExcludedNamespaces` | `[]` | Numéros de namespaces à ignorer, ex. `[ 2, 3 ]` pour User et User_talk. |
 | `$wgPASystemExcludedUsers` | `[]` | Utilisateurs dont les actions ne sont jamais annoncées. |
 | `$wgPASystemExcludedLogTypes` | `[]` | Types de log à ignorer, ex. `[ 'patrol', 'thanks' ]`. |
@@ -132,7 +151,9 @@ Par exemple, pour changer l'annonce d'édition sur un wiki francophone, modifiez
 | `pasystem-line-block` / `-unblock` | $1 icône, $2 lien utilisateur, $3 utilisateur bloqué, $4 résumé |
 | `pasystem-line-newuser` | $1 icône, $2 lien utilisateur |
 | `pasystem-line-rights` | $1 icône, $2 lien utilisateur, $3 lien utilisateur cible, $4 résumé |
-| `pasystem-line-log` | $1 icône, $2 lien utilisateur, $3 résumé |
+| `pasystem-line-log` | $1 icône, $2 lien utilisateur, $3 libellé du type de log, $4 lien page, $5 résumé |
+| `pasystem-line-log-nopage` | $1 icône, $2 lien utilisateur, $3 libellé du type de log, $4 résumé |
+| `pasystem-flood-notice` | $1 nom du wiki — envoyé une fois quand `$wgPASystemMaxPerMinute` est franchi |
 | `pasystem-line-summary` | habillage du résumé ($1) |
 | `pasystem-line-diff` | habillage du lien diff ($1) |
 
@@ -158,6 +179,21 @@ $1 $2 vient d'améliorer $3$4$5$6 🎉
 | `pasystem-link-diff`, `-page`, `-history`, `-contribs` | libellés des liens |
 
 Le markdown Discord (`**gras**`, `` `code` ``, emoji) est autorisé dans tous ces messages.
+
+## Limites et confidentialité
+
+- **Les annonces sont permanentes côté Discord.** Si une révision est masquée
+  a posteriori sur le wiki (RevisionDelete, oversight — par exemple parce
+  qu'elle contenait des données personnelles), le message Discord qui l'a
+  annoncée **reste visible** dans le canal. Gardez-le en tête avant de
+  pointer le webhook vers un serveur Discord public, et pensez à exclure les
+  namespaces sensibles.
+- Le plafond anti-flood utilise une fenêtre fixe d'une minute, pas une
+  fenêtre glissante : une rafale à cheval sur deux fenêtres peut brièvement
+  dépasser le débit configuré.
+- En mode `immediate`, il n'y a pas de retry sur les erreurs réseau (seuls
+  les rate limits retombent sur la JobQueue). Utilisez le mode `job` si la
+  livraison doit être garantie.
 
 ## Page spéciale
 

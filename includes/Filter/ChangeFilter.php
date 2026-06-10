@@ -26,6 +26,19 @@ class ChangeFilter {
 	}
 
 	public function shouldNotify( RecentChange $rc ): FilterDecision {
+		$rcType = (int)$rc->getAttribute( 'rc_type' );
+
+		// 0. Technical change types, disabled by default.
+		// RC_CATEGORIZE rows are emitted for every category membership
+		// change (so a single edit can produce several extra entries) and
+		// RC_EXTERNAL rows come from external feeds (e.g. Wikidata).
+		if ( $rcType === RC_CATEGORIZE && !$this->config->get( 'PASystemNotifyCategorization' ) ) {
+			return FilterDecision::reject( 'categorization change' );
+		}
+		if ( $rcType === RC_EXTERNAL && !$this->config->get( 'PASystemNotifyExternal' ) ) {
+			return FilterDecision::reject( 'external change' );
+		}
+
 		// 1. Bots
 		if ( !$this->config->get( 'PASystemNotifyBots' )
 			&& (int)$rc->getAttribute( 'rc_bot' ) === 1
@@ -40,21 +53,29 @@ class ChangeFilter {
 			return FilterDecision::reject( 'minor edit' );
 		}
 
-		// 3. Excluded namespaces
-		$excludedNs = $this->config->get( 'PASystemExcludedNamespaces' );
+		// 3. Namespace allowlist (when non-empty, only these are announced)
+		$includedNs = $this->config->get( 'PASystemIncludedNamespaces' );
 		$rcNamespace = (int)$rc->getAttribute( 'rc_namespace' );
+		if ( is_array( $includedNs ) && $includedNs !== []
+			&& !in_array( $rcNamespace, $includedNs, true )
+		) {
+			return FilterDecision::reject( "namespace not in allowlist ($rcNamespace)" );
+		}
+
+		// 4. Excluded namespaces
+		$excludedNs = $this->config->get( 'PASystemExcludedNamespaces' );
 		if ( is_array( $excludedNs ) && in_array( $rcNamespace, $excludedNs, true ) ) {
 			return FilterDecision::reject( "excluded namespace ($rcNamespace)" );
 		}
 
-		// 4. Excluded users
+		// 5. Excluded users
 		$excludedUsers = $this->config->get( 'PASystemExcludedUsers' );
 		$userText = (string)$rc->getAttribute( 'rc_user_text' );
 		if ( is_array( $excludedUsers ) && in_array( $userText, $excludedUsers, true ) ) {
 			return FilterDecision::reject( "excluded user ($userText)" );
 		}
 
-		// 5. Excluded log types
+		// 6. Excluded log types
 		$logType = (string)( $rc->getAttribute( 'rc_log_type' ) ?? '' );
 		if ( $logType !== '' ) {
 			$excludedLogTypes = $this->config->get( 'PASystemExcludedLogTypes' );
@@ -65,8 +86,7 @@ class ChangeFilter {
 			}
 		}
 
-		// 6. Minimum diff size (edits only)
-		$rcType = (int)$rc->getAttribute( 'rc_type' );
+		// 7. Minimum diff size (edits only)
 		if ( $rcType === RC_EDIT || $rcType === RC_NEW ) {
 			$minDiff = (int)$this->config->get( 'PASystemMinDiffSize' );
 			if ( $minDiff > 0 ) {

@@ -128,6 +128,35 @@ class DiscordNotifierTest extends MediaWikiUnitTestCase {
 		$notifier->send( [ 'content' => 'x' ] );
 	}
 
+	public function testSendForKindUsesRouteWhenConfigured(): void {
+		$request = $this->createMock( MWHttpRequest::class );
+		$request->method( 'getStatus' )->willReturn( 204 );
+		$capturedUrl = null;
+		$factory = $this->createMock( HttpRequestFactory::class );
+		$factory->method( 'create' )->willReturnCallback(
+			static function ( $url ) use ( $request, &$capturedUrl ) {
+				$capturedUrl = $url;
+				return $request;
+			}
+		);
+		$notifier = new DiscordNotifier(
+			new HashConfig( [
+				'PASystemWebhookUrl'    => self::WEBHOOK,
+				'PASystemWebhookRoutes' => [ 'block' => 'https://discord.com/api/webhooks/999/admin' ],
+				'PASystemDebug'         => false,
+			] ),
+			$factory,
+			new NullLogger()
+		);
+
+		$notifier->sendForKind( 'block', [ 'content' => 'x' ] );
+		$this->assertSame( 'https://discord.com/api/webhooks/999/admin', $capturedUrl );
+
+		// Kind without a route → default webhook
+		$notifier->sendForKind( 'edit', [ 'content' => 'x' ] );
+		$this->assertSame( self::WEBHOOK, $capturedUrl );
+	}
+
 	public function testOverrideUrlTakesPrecedence(): void {
 		$captured = null;
 		$notifier = $this->makeNotifier( 200, '', null, $captured );
